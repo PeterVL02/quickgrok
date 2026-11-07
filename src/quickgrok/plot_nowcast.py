@@ -106,7 +106,10 @@ def main() -> None:
                         linewidth=0.6,
                         alpha=0.5,
                     )
-            ax_skill.plot(*by_step(runs, "skill"), color=color, lw=2, label=name)
+            if not any(
+                r["accepted"] for run in runs for r in run
+            ):  # all backtests clean
+                ax_skill.plot(*by_step(runs, "skill"), color=color, lw=2, label=name)
             axes += [ax_acc, ax_skill]
         if groks:
             for ax in axes:
@@ -124,7 +127,7 @@ def main() -> None:
     ax_skill.set_ylabel("forecast MSE / no-change MSE", color=MUTED, fontsize=9)
     ax_skill.set_title(
         "Forecast skill, backtest on the realised trajectory (< 1: beats no-change; "
-        "filled: clean, hollow: window contains an accepted jump; line: median of clean)",
+        "filled: clean, hollow: window contains an accepted jump; line: median, for arms whose jumps are all rejected)",
         fontsize=9,
         color=INK,
         loc="left",
@@ -150,7 +153,8 @@ def main() -> None:
     ax_vs.legend(frameon=False, fontsize=8, loc="upper left")
     for ax in (ax_acc, ax_skill, ax_norm, ax_vs):
         style_axes(ax)
-    ax_acc.legend(frameon=False, fontsize=8, loc="upper right")
+    ax_acc.legend(fontsize=8, loc="center right", framealpha=0.95, edgecolor="none")
+    ax_skill.legend(frameon=False, fontsize=8, loc="upper right")
     ax_norm.legend(frameon=False, fontsize=8, loc="upper right")
     fig.tight_layout()
     fig.savefig(args.out, dpi=150)
