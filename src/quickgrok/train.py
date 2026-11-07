@@ -98,6 +98,7 @@ def train(
     nowcast_norm_only: bool = False,
     grokfast_lambda: float = 0.0,
     grokfast_alpha: float = 0.98,
+    nowcast_snapshot_every: int = 100,
 ) -> None:
     """Full-batch AdamW training.
 
@@ -111,7 +112,8 @@ def train(
     ends that many steps after test accuracy first reaches GROK_ACC. For op "s5", `p` is
     replaced by the number of symbols, `S5_ORDER`.
     `out_dir/substitutions.jsonl` (see `SubstitutionHook` for `random_k` and `sub_all_at`).
-    `nowcast` other than "none" adds a `NowcastHook` writing `out_dir/nowcast.jsonl`;
+    `nowcast` other than "none" adds a `NowcastHook` writing `out_dir/nowcast.jsonl` (snapshots
+    every `nowcast_snapshot_every` steps);
     `grokfast_lambda > 0` adds a `GrokfastHook`. Checkpoints and `weight_norm` use the effective weights. With `stop_after_grok`, training
     ends that many steps after test accuracy first reaches GROK_ACC.
     """
@@ -167,6 +169,7 @@ def train(
                 out_dir / "nowcast.jsonl",
                 horizon=nowcast_horizon,
                 jump_every=nowcast_every,
+                snapshot_every=nowcast_snapshot_every,
                 k=nowcast_k,
                 max_loss_ratio=nowcast_max_loss_ratio,
                 seed=seed,
@@ -294,6 +297,12 @@ def main() -> None:
     )
     parser.add_argument("--nowcast-max-loss-ratio", type=float, default=1.5)
     parser.add_argument(
+        "--nowcast-snapshot-every",
+        type=int,
+        default=100,
+        help="steps between snapshots; horizon and jump interval must be multiples",
+    )
+    parser.add_argument(
         "--nowcast-norm-only",
         action="store_true",
         help="control: rescale each tensor to its forecast's norm, keep its direction",
@@ -340,6 +349,7 @@ def main() -> None:
         args.nowcast_norm_only,
         args.grokfast_lambda,
         args.grokfast_alpha,
+        args.nowcast_snapshot_every,
     )
 
 
