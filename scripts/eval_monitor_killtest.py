@@ -410,7 +410,7 @@ def plot_scores(
             ax.tick_params(labelsize=7)
             if row == 0:
                 ax.set_title(titles[m], fontsize=9, color=INK, loc="left")
-            if col == 0:
+            if not any(applies(f, arm) for f in FIRING[:col]):  # first visible panel
                 ax.set_ylabel(arm, color=INK, fontsize=10, rotation=0, labelpad=14)
             if row == len(ARMS) - 1:
                 ax.set_xlabel("training step", color=MUTED, fontsize=8)
@@ -428,7 +428,10 @@ def plot_scores(
 
 
 def plot_forecast_errors(errors: dict[str, dict[Method, list[float]]]) -> None:
-    """Per grokking arm: |ln(grok_hat / grok)| per test seed (dots) and log-MAE (bar)."""
+    """Per grokking arm: |ln(grok_hat / grok)| per test seed (dots) and log-MAE (line).
+
+    Log y axis; errors below 1e-4 (e.g. an exact clock hit) are drawn at 1e-4.
+    """
     fig, axes = plt.subplots(1, len(GROK_ARMS), figsize=(14, 3.4), sharey=True)
     rng = np.random.default_rng(0)
     for ax, arm in zip(axes, GROK_ARMS):
@@ -448,15 +451,21 @@ def plot_forecast_errors(errors: dict[str, dict[Method, list[float]]]) -> None:
         for i, m in enumerate(names):
             e = errors[arm][m]
             color = ARM_COLORS[0] if m in MONITORS else MUTED
-            ax.bar(i, float(np.mean(e)), width=0.6, color=color, alpha=0.35, lw=0)
+            ax.hlines(float(np.mean(e)), i - 0.3, i + 0.3, color=INK, lw=2, zorder=4)
             ax.scatter(
-                i + rng.uniform(-0.15, 0.15, len(e)), e, s=12, color=color, zorder=3
+                i + rng.uniform(-0.15, 0.15, len(e)),
+                np.maximum(e, 1e-4),
+                s=12,
+                color=color,
+                alpha=0.8,
+                zorder=3,
             )
         ax.set_xticks(range(len(names)), names, fontsize=8)
         ax.set_title(arm, fontsize=10, color=INK, loc="left")
+    axes[0].set_yscale("log")
     axes[0].set_ylabel("|ln(grok_hat / grok)|", color=MUTED, fontsize=9)
     fig.suptitle(
-        "Forecast error per method (bar: log-MAE; dots: test seeds; blue: monitors, "
+        "Forecast error per method (black line: log-MAE; dots: test seeds; blue: monitors, "
         "grey: baselines)",
         fontsize=10,
         color=INK,
