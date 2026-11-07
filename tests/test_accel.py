@@ -1,4 +1,7 @@
-"""Check the probe split, the harmonic share and the hook API. Run: uv run python tests/test_accel.py"""
+"""Check the probe split, the harmonic share, the hook API and substitution.
+
+Run: uv run python tests/test_accel.py
+"""
 
 import json
 import math
@@ -6,11 +9,22 @@ import tempfile
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
-from quickgrok.accel import Accelerator, Hook, ProbeHook
+from quickgrok.accel import (
+    Accelerator,
+    Hook,
+    ProbeHook,
+    SubstitutionHook,
+    SubstitutionMode,
+    effective_state_dict,
+    expand,
+    fit_coef,
+    harmonic_basis,
+)
 from quickgrok.data import make_dataset
-from quickgrok.models import build_model
+from quickgrok.models import GrokMLP, build_model
 from quickgrok.regress import fit_neurons, harmonic_share, make_grid
 from quickgrok.train import to_tensors
 
@@ -70,8 +84,126 @@ def test_optimizer_replacement() -> None:
     assert accel.after_step(1, old) is new
 
 
+P = 97
+NEURONS, KS = [0, 5, 9], [3, 7, 20]
+
+
+def make_hook(mode: SubstitutionMode, tmp: Path) -> SubstitutionHook:
+    """A substitution hook on the seed-100 training split, logging into `tmp`."""
+    x_train, y_train = to_tensors(make_dataset(P, "add", 0.3, seed=100)[0], "cpu")
+    return SubstitutionHook(
+        x_train,
+        P,
+        tmp / f"{mode}_probe.jsonl",
+        mode=mode,
+        tau_share=0.7,
+        tau_r2=0.8,
+        y_train=y_train,
+        log_path=tmp / f"{mode}_subs.jsonl",
+    )
+
+
+def make_mlp() -> tuple[GrokMLP, torch.optim.Optimizer]:
+    """A fixed-seed GrokMLP and its AdamW optimizer."""
+    torch.manual_seed(0)
+    model = GrokMLP(P)
+    return model, torch.optim.AdamW(model.parameters(), weight_decay=1.0)
+
+
+def full_grid() -> torch.Tensor:
+    """All p*p token inputs (N, 3)."""
+    a, b = make_grid(P)
+    return torch.stack([a, b, torch.full_like(a, P)], dim=1)
+
+
+def test_projection() -> None:
+    """A column in the harmonic span is a fixed point; projecting noise shrinks it."""
+    basis = harmonic_basis(KS, P, 4)
+    in_span = expand(basis, torch.randn(len(KS), basis.shape[-1]))
+    assert torch.allclose(expand(basis, fit_coef(basis, in_span)), in_span, atol=1e-5)
+    noise = torch.randn(len(KS), P)
+    projected = expand(basis, fit_coef(basis, noise))
+    assert (projected.norm(dim=1) < 0.6 * noise.norm(dim=1)).all()  # 9 of 97 dims kept
+
+
+def test_module_matches_project() -> None:
+    """Right after the same swap both modes give the same outputs; module grads go to coef only."""
+    x = full_grid()
+    with tempfile.TemporaryDirectory() as tmp:
+        outputs = []
+        for mode in ("project", "module"):
+            model, opt = make_mlp()
+            before = model(x)
+            make_hook(mode, Path(tmp)).substitute(model, NEURONS, KS, opt)
+            outputs.append(model(x))
+        assert (outputs[0] - before).abs().max() > 1e-3  # the swap changed something
+        assert (outputs[0] - outputs[1]).abs().max() < 1e-5
+
+    outputs[1].logsumexp(-1).sum().backward()
+    for embed in (model.embed_a, model.embed_b):
+        coef = embed.parametrizations.weight[0].coef
+        original = embed.parametrizations.weight.original
+        assert coef.grad is not None and coef.grad.abs().min() > 0
+        assert original.grad is not None
+        assert (original.grad[:, NEURONS] == 0).all()
+        assert original.grad[:, 1].abs().max() > 0
+
+
+def test_grow_optimizer() -> None:
+    """Growing rebuilds the optimizer over every parameter once, carrying over state."""
+    model, opt = make_mlp()
+    x, y = full_grid(), torch.zeros(P * P, dtype=torch.long)
+    with tempfile.TemporaryDirectory() as tmp:
+        hook = make_hook("module", Path(tmp))
+
+        def train_step(opt: torch.optim.Optimizer) -> None:
+            """One AdamW step on a dummy objective."""
+            opt.zero_grad()
+            F.cross_entropy(model(x), y).backward()
+            opt.step()
+
+        train_step(opt)
+        opt = hook.substitute(model, NEURONS[:2], KS[:2], opt)
+        train_step(opt)
+        coef = model.embed_a.parametrizations.weight[0].coef
+        old_coef_state = dict(opt.state[coef])
+        old_unembed_state = opt.state[model.unembed.weight]
+        new_opt = hook.substitute(model, NEURONS[2:], KS[2:], opt)
+
+    params = new_opt.param_groups[0]["params"]
+    assert len(params) == len({id(q) for q in params}) == len(list(model.parameters()))
+    assert {id(q) for q in params} == {id(q) for q in model.parameters()}
+    assert (
+        new_opt.state[model.unembed.weight]["exp_avg"] is old_unembed_state["exp_avg"]
+    )
+    new_coef = model.embed_a.parametrizations.weight[0].coef
+    state = new_opt.state[new_coef]
+    assert new_coef.shape[0] == 3 and state["exp_avg"].shape == new_coef.shape
+    assert torch.equal(state["exp_avg"][:2], old_coef_state["exp_avg"])
+    assert (state["exp_avg_sq"][2:] == 0).all() and state["step"] == old_coef_state[
+        "step"
+    ]
+    assert new_opt.param_groups[0]["weight_decay"] == 1.0
+    train_step(new_opt)  # the rebuilt optimizer steps without error
+
+
+def test_effective_state_dict() -> None:
+    """A module-mode model's effective weights load into a plain GrokMLP with equal outputs."""
+    model, opt = make_mlp()
+    with tempfile.TemporaryDirectory() as tmp:
+        make_hook("module", Path(tmp)).substitute(model, NEURONS, KS, opt)
+    fresh = GrokMLP(P)
+    fresh.load_state_dict(effective_state_dict(model))
+    x = full_grid()
+    assert torch.allclose(fresh(x), model(x), atol=1e-6)
+
+
 if __name__ == "__main__":
     test_probe_split()
     test_harmonic_share()
     test_optimizer_replacement()
+    test_projection()
+    test_module_matches_project()
+    test_grow_optimizer()
+    test_effective_state_dict()
     print("ok")

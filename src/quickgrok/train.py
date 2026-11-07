@@ -7,7 +7,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-from typing import TypedDict, get_args
+from typing import Literal, TypedDict, get_args
 
 # Idle OpenMP threads sleep instead of spinning. Spinning after the probe's CPU fits slowed the
 # GPU training loop by ~10%. Only takes effect if torch is not imported yet.
@@ -17,7 +17,14 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from quickgrok.accel import Accelerator, Hook, ProbeHook
+from quickgrok.accel import (
+    Accelerator,
+    Hook,
+    ProbeHook,
+    SubstitutionHook,
+    SubstitutionMode,
+    effective_state_dict,
+)
 from quickgrok.data import Example, Operation, make_dataset
 from quickgrok.models import (  # noqa: F401  (re-exported for `from quickgrok.train import ...`)
     Checkpoint,
@@ -39,7 +46,7 @@ class Metrics(TypedDict):
     train_acc: float
     val_loss: float
     val_acc: float
-    weight_norm: float  # L2 norm of all parameters
+    weight_norm: float  # L2 norm of all (effective) weights
 
 
 def to_tensors(examples: list[Example], device: str) -> tuple[Tensor, Tensor]:
@@ -74,13 +81,19 @@ def train(
     probe_layer: int = 0,
     probe_harmonics: int = 4,
     stop_after_grok: int | None = None,
+    substitute: Literal["none"] | SubstitutionMode = "none",
+    tau_share: float = 0.7,
+    tau_r2: float = 0.8,
 ) -> None:
     """Full-batch AdamW training.
 
     Every `eval_every` steps, losses and accuracies go to `out_dir/metrics.json`; every
     `save_every` steps (a multiple of `eval_every`) a checkpoint is saved and progress printed.
-    `probe_every > 0` adds a `ProbeHook` writing `out_dir/probe.jsonl`. With `stop_after_grok`,
-    training ends that many steps after test accuracy first reaches GROK_ACC.
+    `probe_every > 0` adds a `ProbeHook` writing `out_dir/probe.jsonl`; with `substitute` other
+    than "none" it is a `SubstitutionHook` (thresholds `tau_share`, `tau_r2`) that also writes
+    `out_dir/substitutions.jsonl`. Checkpoints and `weight_norm` use the effective weights.
+    With `stop_after_grok`, training ends that many steps after test accuracy first reaches
+    GROK_ACC.
     """
     assert save_every % eval_every == 0, "save_every must be a multiple of eval_every"
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -95,18 +108,29 @@ def train(
     )
     out_dir.mkdir(parents=True, exist_ok=True)
     hooks: list[Hook] = []
-    if probe_every:
+    probe_args = (
+        x_train,
+        p,
+        out_dir / "probe.jsonl",
+        probe_layer,
+        probe_every,
+        probe_harmonics,
+        seed,
+    )
+    if substitute != "none":
+        assert probe_every > 0, "substitution needs probe_every > 0"
         hooks.append(
-            ProbeHook(
-                x_train,
-                p,
-                out_dir / "probe.jsonl",
-                probe_layer,
-                probe_every,
-                probe_harmonics,
-                seed,
+            SubstitutionHook(
+                *probe_args,
+                mode=substitute,
+                tau_share=tau_share,
+                tau_r2=tau_r2,
+                y_train=y_train,
+                log_path=out_dir / "substitutions.jsonl",
             )
         )
+    elif probe_every:
+        hooks.append(ProbeHook(*probe_args))
     accel = Accelerator(model, hooks)
     history: list[Metrics] = []
     end = steps
@@ -115,7 +139,8 @@ def train(
         if step % eval_every == 0 or step == end:
             train_loss, train_acc = evaluate(model, x_train, y_train)
             val_loss, val_acc = evaluate(model, x_val, y_val)
-            norm = torch.cat([q.detach().flatten() for q in model.parameters()]).norm()
+            weights = effective_state_dict(model).values()
+            norm = torch.cat([w.flatten() for w in weights]).norm()
             history.append(
                 {
                     "step": step,
@@ -143,7 +168,7 @@ def train(
                 "step": step,
                 "train_acc": train_acc,
                 "val_acc": val_acc,
-                "state_dict": model.state_dict(),
+                "state_dict": effective_state_dict(model),
             }
             torch.save(ckpt, out_dir / f"step_{step:06d}.pt")
             (out_dir / "metrics.json").write_text(json.dumps(history))
@@ -181,7 +206,17 @@ def main() -> None:
         default=None,
         help="end training this many steps after test acc first reaches 99%%",
     )
+    parser.add_argument(
+        "--substitute",
+        choices=["none", *get_args(SubstitutionMode)],
+        default="none",
+        help="substitute neurons that pass the probe trigger (needs --probe-every)",
+    )
+    parser.add_argument("--tau-share", type=float, default=0.7)
+    parser.add_argument("--tau-r2", type=float, default=0.8)
     args = parser.parse_args()
+    if args.substitute != "none" and args.probe_every <= 0:
+        parser.error("--substitute needs --probe-every > 0")
     out_dir = args.out_dir or Path("runs") / f"{args.model}_p{args.p}_{args.op}"
     train(
         args.model,
@@ -200,6 +235,9 @@ def main() -> None:
         args.probe_layer,
         args.probe_harmonics,
         args.stop_after_grok,
+        args.substitute,
+        args.tau_share,
+        args.tau_r2,
     )
 
 
