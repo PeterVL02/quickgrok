@@ -208,7 +208,7 @@ def plot_curves(
         axes[1, col].set_xlabel("training step (log)", color=MUTED, fontsize=9)
     axes[0, 0].set_ylabel("cross-entropy loss (log)", color=MUTED, fontsize=9)
     axes[1, 0].set_ylabel("accuracy", color=MUTED, fontsize=9)
-    axes[1, 0].legend(frameon=False, fontsize=8, loc="center left")
+    axes[0, 0].legend(frameon=False, fontsize=8, loc="lower left")  # empty corner
     fig.suptitle(
         "Train and test curves per arm (thin: individual seeds)",
         fontsize=12,
@@ -364,7 +364,7 @@ def plot_trigger(
         x=0.01,
         ha="left",
     )
-    fig.tight_layout(rect=(0, 0, 1, 1 - 0.4 / fig.get_figheight()))  # room for suptitle
+    fig.tight_layout()  # also makes room for the suptitle
     fig.savefig(out, dpi=150)
     plt.close(fig)
 

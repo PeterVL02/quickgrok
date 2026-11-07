@@ -39,6 +39,25 @@ def get_flat(model: nn.Module) -> Tensor:
     return torch.cat([p.detach().flatten() for p in model.parameters()])
 
 
+def get_named(model: nn.Module) -> dict[str, Tensor]:
+    """Copies of all parameters, keyed by a name that survives a weight being parametrized.
+
+    `e.parametrizations.weight.original` is keyed `e.weight`, like the plain weight it replaces.
+    """
+    return {
+        n.replace("parametrizations.", "").removesuffix(".original"): w.detach().clone()
+        for n, w in model.named_parameters()
+    }
+
+
+def align(old: Tensor | None, now: Tensor) -> Tensor:
+    """`old` in the shape of `now`: rows missing at the end (a parameter that grew since) and
+    parameters missing altogether are filled from `now`, i.e. a flat history."""
+    if old is None:
+        return now
+    return old if old.shape == now.shape else torch.cat([old, now[len(old) :]])
+
+
 def set_flat(model: nn.Module, flat: Tensor) -> None:
     """Copy a vector from `get_flat` back into the model's parameters, in place."""
     sizes = [p.numel() for p in model.parameters()]
@@ -139,7 +158,9 @@ class NowcastHook(Hook):
     otherwise the parameters are restored exactly. The LSTM forecaster is
     trained at each attempt on the window ending `horizon` steps ago. Optimizer state is left
     as is. Appends one `NowcastRecord` per attempt to `out_path` (truncated on construction).
-    Plain parameters only (no parametrizations). `norm_only` (control) keeps each parameter
+    Snapshots are kept per parameter name and aligned to the current parameters (`align`),
+    so the hook composes with module substitution, which renames the weights it parametrizes
+    and grows its coefficient parameters. `norm_only` (control) keeps each parameter
     tensor's direction and only rescales it to the norm of its forecast.
     """
 
@@ -174,29 +195,40 @@ class NowcastHook(Hook):
         self.snapshot_every = snapshot_every
         self.max_loss_ratio = max_loss_ratio
         self.norm_only = norm_only
-        self.snaps: dict[int, Tensor] = {}
+        self.snaps: dict[int, dict[str, Tensor]] = {}
         self.accepted_steps: list[int] = []
         out_path.write_text("")
 
-    def window(self, end: int) -> Tensor | None:
-        """Snapshots (L, N) ending at step `end`, or None if any is missing."""
+    def window(self, end: int, model: nn.Module) -> Tensor | None:
+        """Snapshots (L, N) ending at step `end`, flattened in the model's current parameter
+        layout, or None if any is missing."""
         n = self.forecaster.window
         steps = [end - i * self.snapshot_every for i in reversed(range(n))]
         if any(s not in self.snaps for s in steps):
             return None
-        return torch.stack([self.snaps[s] for s in steps])
+        now = get_named(model)
+        return torch.stack(
+            [
+                torch.cat(
+                    [align(self.snaps[s].get(k), w).flatten() for k, w in now.items()]
+                )
+                for s in steps
+            ]
+        )
 
     def train_loss(self, model: nn.Module) -> float:
         """Full-batch cross-entropy on the training set."""
         with torch.no_grad():
             return F.cross_entropy(model(self.x_train), self.y_train).item()
 
-    def backtest(self, step: int, now: Tensor) -> tuple[float | None, bool]:
+    def backtest(
+        self, step: int, model: nn.Module, now: Tensor
+    ) -> tuple[float | None, bool]:
         """Skill of the forecast from the window ending `horizon` steps ago against `now`.
 
         Returns (forecast MSE / no-change MSE, whether no accepted jump lies in that window).
         """
-        past = self.window(step - self.horizon)
+        past = self.window(step - self.horizon, model)
         if past is None:
             return None, True
         start = step - self.horizon - (len(past) - 1) * self.snapshot_every
@@ -207,12 +239,12 @@ class NowcastHook(Hook):
     def jump(self, step: int, model: nn.Module) -> NowcastRecord | None:
         """Try one jump at `step`; None if there is not enough history yet."""
         now = get_flat(model)
-        current = self.window(step)
-        train_past = self.window(step - self.horizon)
+        current = self.window(step, model)
+        train_past = self.window(step - self.horizon, model)
         is_lstm = isinstance(self.forecaster, LSTMForecaster)
         if current is None or (is_lstm and train_past is None):
             return None
-        skill, clean = self.backtest(step, now)
+        skill, clean = self.backtest(step, model, now)
         fit: FitStats | None = None
         if isinstance(self.forecaster, LSTMForecaster) and train_past is not None:
             fit = self.forecaster.fit(train_past, now)
@@ -252,7 +284,7 @@ class NowcastHook(Hook):
         """Snapshot (pre-jump weights); every `jump_every` steps from `jump_every` on, try a jump."""
         if step % self.snapshot_every:
             return None
-        self.snaps[step] = get_flat(model)
+        self.snaps[step] = get_named(model)
         if step >= self.jump_every and step % self.jump_every == 0:
             record = self.jump(step, model)
             if record is not None:
