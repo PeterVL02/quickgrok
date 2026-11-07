@@ -1,7 +1,7 @@
 """Make the teaching figures for intuition/README.md.
 
 Run from the repo root: uv run python intuition/make_figures.py
-Reads (CPU only) runs/mlp_baseline/seed0/ and writes PNGs to intuition/figures/.
+Reads (CPU only) runs/mlp_baseline/seed0/ and runs/t6/ and writes PNGs to intuition/figures/.
 """
 
 import json
@@ -15,11 +15,26 @@ import numpy as np
 from matplotlib.colors import ListedColormap
 from matplotlib.patches import Patch
 
+from quickgrok.accel import harmonic_basis
 from quickgrok.data import make_dataset
-from quickgrok.train import load_model
+from quickgrok.models import load_model
 
 ROOT = Path(__file__).resolve().parent.parent
 RUN = ROOT / "runs" / "mlp_baseline" / "seed0"
+T6 = ROOT / "runs" / "t6"
+ARMS = {  # run folder -> plain-language label, in plotting order
+    "vanilla": "normal training",
+    "project": "snap once",
+    "module": "wave module",
+    "module_random_k": "wave module, wrong frequency",
+    "module_all_step0": "all waves from the start",
+    "module_all_step0_random_k": "all waves from the start, wrong frequencies",
+}
+SWAP_NEURON = (
+    15,
+    2,
+    3_000,
+)  # neuron, fitted frequency, swap step: first event of seed 0
 OUT = Path(__file__).resolve().parent / "figures"
 P = 97
 NEURON = (
@@ -27,6 +42,7 @@ NEURON = (
 )
 
 BLUE, ORANGE, GREEN, YELLOW = "#2a78d6", "#eb6834", "#1baf7a", "#eda100"
+COLOURS = (BLUE, ORANGE, GREEN, YELLOW, "#e87ba4", "#008300")
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 TEST_TINT = (
     "#f7d5c6"  # light orange for the many held-out cells, so the train cells stand out
@@ -429,58 +445,129 @@ def plot_poly_vs_wave() -> None:
     save(fig, "poly_vs_wave.png")
 
 
-def plot_jump_idea() -> None:
-    """Schematic: normal training path vs a hypothetical 'jump' to the visible structure."""
-    t = np.linspace(0, 40, 400)
-    normal = 1 / (1 + np.exp(-(t - 15) / 1.6))
-    t_jump, shift = 9.0, 4.0
-    after = t >= t_jump
-    jump = 1 / (1 + np.exp(-(t[after] - (15 - shift)) / 1.6))
-    structure = np.clip((t - 1) / 12, 0, 1) ** 1.3
-    y0 = 1 / (1 + np.exp(-(t_jump - 15) / 1.6))
+def load_history(run: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Return logged steps and test accuracy of one run from its metrics.json."""
+    hist = json.loads((run / "metrics.json").read_text())
+    return np.array([h["step"] for h in hist]), np.array([h["val_acc"] for h in hist])
 
+
+def grok_step(run: Path) -> int:
+    """First logged step at which test accuracy reaches 99%."""
+    steps, test = load_history(run)
+    return int(steps[np.argmax(test >= 0.99)])
+
+
+def plot_jump_idea() -> None:
+    """Measured test accuracy (median of 10 seeds) for normal training and the three jump arms."""
+    end = 21_000
+    grid = np.arange(0, end + 1, 100)
     fig, ax = plt.subplots(figsize=(9, 5))
-    ax.plot(
-        t, structure, color=GREEN, lw=2, ls=":", label="how wave-like the neurons are"
-    )
-    ax.plot(t, normal, color=ORANGE, lw=2.5, label="test accuracy, normal training")
-    ax.plot(
-        t[after],
-        jump,
-        color=BLUE,
-        lw=2.5,
-        ls="--",
-        label="test accuracy with a jump (hoped for)",
-    )
-    ax.plot([t_jump, t_jump], [y0, jump[0]], color=BLUE, lw=2.5)
+    for (arm, label), color in zip(list(ARMS.items())[:4], COLOURS):
+        curves = []
+        for run in sorted((T6 / arm).glob("seed*")):
+            steps, test = load_history(run)
+            # A run stops 3,000 steps after grokking; hold its last value after that.
+            curves.append(np.interp(grid, steps, test))
+        ax.plot(grid, np.median(curves, axis=0), color=color, lw=2.5, label=label)
+    ax.axvline(2_250, color=MUTED, ls=":", lw=1)
     ax.text(
-        t_jump - 0.5,
-        (y0 + jump[0]) / 2,
-        "jump",
-        color=BLUE,
-        ha="right",
-        va="center",
+        2_400,
+        0.9,
+        "first neurons swapped\n(step ~2,250)",
+        color=MUTED,
         fontsize=9,
+        va="top",
     )
-    ax.annotate(
-        "",
-        xy=(15 - shift, 0.5),
-        xytext=(15, 0.5),
-        arrowprops={"arrowstyle": "<-", "color": MUTED, "lw": 1},
-    )
-    ax.text(
-        15 + 0.5, 0.48, "time saved?", ha="left", va="center", color=MUTED, fontsize=9
-    )
-    ax.set_xlabel("training time (schematic)")
-    ax.set_ylabel("0 = none, 1 = full")
-    ax.set_xticks([])
-    ax.set_ylim(-0.05, 1.1)
-    ax.set_title(
-        "The idea (a sketch, not a result): jump to where the network is heading"
-    )
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=2, fontsize=9)
+    ax.set_xlim(0, end)
+    ax.set_ylim(-0.05, 1.05)
+    ax.set_xlabel("training step")
+    ax.set_ylabel("test accuracy (median of 10 seeds)")
+    ax.set_title("The jump, measured: swapping wave-shaped neurons as they appear")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=2, fontsize=9)
     style_axes(ax)
     save(fig, "jump_idea.png")
+
+
+def plot_results_dots() -> None:
+    """Steps to 99% test accuracy per seed for the six arms, median marked."""
+    fig, ax = plt.subplots(figsize=(10, 5.4))
+    rng = np.random.default_rng(0)
+    base = None
+    for row, ((arm, label), color) in enumerate(zip(ARMS.items(), COLOURS)):
+        steps = np.array([grok_step(r) for r in sorted((T6 / arm).glob("seed*"))])
+        y = -row + rng.uniform(-0.15, 0.15, len(steps))  # jitter so equal steps show
+        ax.plot(steps, y, "o", color=color, ms=6, mec="white", mew=0.8)
+        med = float(np.median(steps))
+        base = base or med
+        ax.plot([med, med], [-row - 0.3, -row + 0.3], color=INK, lw=2)
+        note = f"median {med:,.0f}" + (
+            "" if row == 0 else f"  ({1 - med / base:.0%} fewer)"
+        )
+        ax.text(med + 250, -row + 0.3, note, fontsize=9, va="bottom")
+    ax.plot([], [], "o", color=MUTED, ms=6, label="one seed (one training run)")
+    ax.plot([], [], color=INK, lw=2, label="median of 10 seeds")
+    ax.set_yticks(-np.arange(len(ARMS)), list(ARMS.values()))
+    ax.tick_params(axis="y", labelsize=10, colors=INK)
+    ax.set_ylim(-len(ARMS) + 0.4, 0.8)
+    ax.set_xlim(0, 21_000)
+    ax.set_xlabel("training steps until test accuracy ≥ 99% (fewer is faster)")
+    ax.set_title("How long each version takes to grok (10 seeds each)")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=2, fontsize=9)
+    style_axes(ax)
+    ax.grid(axis="y", visible=False)
+    save(fig, "results_dots.png")
+
+
+def outside_share(run: Path, neuron: int, k: int) -> tuple[np.ndarray, np.ndarray]:
+    """Share of a neuron's input-weight energy (column of U) outside its fitted waves, per checkpoint.
+
+    The waves are the 9 basis functions used by the substitution: a constant plus cos and sin
+    of frequency k and its harmonics 2k, 3k, 4k.
+    """
+    B = harmonic_basis([k], P, 4)[0].double().numpy()
+    proj = B @ np.linalg.pinv(B)
+    steps, shares = [], []
+    for ckpt in sorted(run.glob("step_*.pt")):
+        u = (
+            load_model(ckpt)[0]
+            .state_dict()["embed_a.weight"]
+            .double()
+            .numpy()[:, neuron]
+        )
+        r = u - proj @ u
+        steps.append(int(ckpt.stem.removeprefix("step_")))
+        shares.append(float(r @ r / (u @ u)))
+    return np.array(steps), np.array(shares)
+
+
+def plot_snap_vs_mould() -> None:
+    """One neuron (seed 0) swapped at the same moment in a 'snap once' and a 'module' run."""
+    neuron, k, swap = SWAP_NEURON
+    fig, axes = plt.subplots(1, 2, figsize=(14, 4.8), gridspec_kw={"wspace": 0.2})
+    for arm, color in zip(list(ARMS)[:3], COLOURS):
+        steps, share = outside_share(T6 / arm / "seed0", neuron, k)
+        if (
+            arm != "vanilla"
+        ):  # checkpoints are saved just before the swap; right after it is 0
+            i = int(np.searchsorted(steps, swap)) + 1
+            steps, share = np.insert(steps, i, swap), np.insert(share, i, 0.0)
+        for ax in axes:
+            ax.plot(steps, 100 * share, color=color, lw=2.2, label=ARMS[arm])
+    for ax in axes:
+        ax.axvline(swap, color=MUTED, ls=":", lw=1)
+        ax.set_xlabel("training step")
+        style_axes(ax)
+    axes[0].set_ylabel("% of weight energy outside its waves")
+    axes[0].text(swap + 300, 70, f"swap at step {swap:,}", color=MUTED, fontsize=9)
+    axes[0].set_title(f"Neuron {neuron} (frequency {k}), seed 0: whole run")
+    axes[0].legend(loc="upper right", fontsize=9)
+    ax = axes[1]
+    ax.set_xlim(swap - 500, 21_500)
+    ax.set_ylim(-1, 20)
+    ax.set_title("Zoom after the swap: snapped drifts back, moulded stays at 0")
+    ax.text(12_000, 9, "snap once: back to ~7%,\nlike normal training", color=ORANGE)
+    ax.text(12_000, 1.5, "wave module: held at 0%", color=GREEN)
+    save(fig, "snap_vs_mould.png")
 
 
 def main() -> None:
@@ -491,6 +578,8 @@ def main() -> None:
     plot_neuron_lens()
     plot_poly_vs_wave()
     plot_jump_idea()
+    plot_results_dots()
+    plot_snap_vs_mould()
 
 
 if __name__ == "__main__":

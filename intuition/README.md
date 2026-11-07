@@ -1,6 +1,6 @@
 # Grokking, and can we make it happen sooner?
 
-*An intuition-first tour of the quickgrok project, written for second-semester data science students. Status as of 7 November 2026: **work in progress**.*
+*An intuition-first tour of the quickgrok project, written for second-semester data science students. Status as of 7 November 2026: **first results in, work in progress**.*
 
 You need: basic Python, mean and variance, linear regression with least squares, train/test splits and overfitting, and a rough idea of what a neural network is (layers, weights, ReLU, gradient descent). You do **not** need Fourier analysis. We build the little of it we need from a clock.
 
@@ -22,7 +22,7 @@ Read the x-axis carefully: it is on a **log scale**, so each grid line means ten
 
 The network "got it" about 90 times later than it memorised. This delayed understanding is called **grokking** (from a science-fiction novel, where "to grok" means to understand something deeply). It was first reported in 2022 (Power et al.).
 
-The question behind this project: **can we make grokking happen sooner?** Before we can answer that, we need to understand the task, what "understanding" looks like inside the network, and why it takes so long.
+The question behind this project: **can we make grokking happen sooner?** Short answer (section 7): yes, by 41% on this task, but *why* it works turned out to be the more interesting lesson. Before we get there, we need to understand the task, what "understanding" looks like inside the network, and why it takes so long.
 
 ## 2. The task: clock arithmetic with 97 hours
 
@@ -118,54 +118,83 @@ The middle row shows the median R² over all 512 neurons. **Polynomial regressio
 
 The bottom row is the share of each neuron's explained variance that comes from its single best frequency. It climbs **long before** test accuracy jumps. In the shaded band (the middle 50% of neurons), the top quarter of neurons are already above 0.85 by about step 11,000, when test accuracy is still below 50%. Some neurons are "done" thousands of steps before the network as a whole has generalised.
 
-## 6. The idea: if we can see where the network is heading, can we jump there?
+## 6. The idea, and how we tested it
 
 **Analogy.** You are hiking in fog towards a summit. The path zig-zags slowly upwards. At some point the fog lifts for a moment and you see the summit. You could keep following the zig-zag, or you could walk straight towards it.
 
-In our case the "zig-zag" is the long plateau where the network slowly trades its lookup table for the rule. The "summit" is the simple wave shape each neuron ends up with. And we can see that shape early, at least for some neurons.
+In our case the "zig-zag" is the long plateau where the network slowly trades its lookup table for the rule. The "summit" is the simple wave shape each neuron ends up with. The plan has three steps: (1) check that we can see the summit early, (2) jump towards it, (3) check fairly whether the jump saved time.
 
-![jump idea](figures/jump_idea.png)
+### Step 1: can we see the destination early?
 
-*This figure is a sketch of the hope, not a measured result.*
+We added a **probe** to training. Every 500 steps it runs the regression from section 5 on every one of the 512 neurons. It uses **training pairs only**: 80% of them to fit the waves and the other 20% to check the fit (a train/test split inside the training set). A neuron is flagged as "wave-shaped" when the waves explain at least 80% of its variance on the check pairs, and at least half of that comes from one frequency and its harmonics.
 
-The planned method:
+**Result:** 10% of the neurons are flagged at **36–54% of the way to grokking** (around step 6,000–10,000 of ~18,000, depending on how strict the thresholds are), while test accuracy is still about **0%**. So the summit really is visible early, for some neurons. (Running the probe did not change when the network grokked.)
 
-1. Train normally. Every few hundred steps, run the regression from section 5 on every neuron.
-2. When a neuron is fitted well (high R², one frequency dominating), **jump**: replace that neuron by its fitted wave function. The wave function's amplitude and phase stay trainable, so the network can still adjust it.
-3. Keep training, and measure how many steps it takes to reach 99% test accuracy.
+### Step 2: jump, in two different ways
 
-How we will judge it fairly:
+When the probe flags a neuron, we replace it by its fitted waves. We tried two versions:
 
-- **Many random seeds.** A **seed** fixes the random starting weights and the random choices during training. Different seeds grok at different times. For this MLP, five seeds grokked between steps 18,200 and 18,700 (that is the middle 50%, the interquartile range), so we need a speed-up clearly bigger than that spread. Even with identical settings, training on a GPU is not exactly reproducible, which is one more reason to use many seeds.
-- **No peeking at the test set.** The regression that decides when to jump may only use **training** pairs. If it used test pairs, we would be quietly leaking the answers.
-- **Controls.** We will also replace neurons with the **wrong** frequency. If that helps just as much, the speed-up didn't come from finding the right structure. It may come from the replacement itself, for example from shrinking the weights, which is what weight decay already does.
-- **Compare with known tricks.** There are existing methods to speed up grokking, such as **Grokfast**, which amplifies the slow-moving part of the gradient. Our idea is only interesting if it can compete with them, or teaches us something they don't.
+- **Snap once.** Overwrite the neuron's weights with the fitted wave, then let training continue as normal. Gradient descent may change the weights back.
+- **Wave module.** Replace the neuron's 97 weights per input with a small trainable function: a constant plus a cosine and sine at the neuron's frequency and 3 harmonics. That is **9 numbers instead of 97**. Training can still change the 9 numbers (how big each wave is and where it peaks), but the neuron can never stop being a wave of that frequency.
 
-## 7. How it is going (honest status)
+**Analogy: a sculpture of wet clay.** *Snap once* presses the clay into a mould once and takes it out again. It may sag back. The *wave module* leaves the clay in the mould: you can still push it around inside, but it keeps the mould's shape.
 
-**Done:**
+At the moment of the swap the two versions give exactly the same network. They differ only in what happens afterwards. This figure follows one neuron that was swapped at step 3,000 in both versions (same starting weights):
 
-- Grokking is reproduced in two models: the MLP (99% test accuracy at step ~18,500, very consistent over 5 seeds) and a small one-layer transformer (between ~19,600 and ~29,700 steps over 3 seeds, a much bigger spread). The MLP is therefore the better test bed.
-- The "inside view" is clear: after grokking, neurons are periodic in a and b with one dominant frequency. Waves explain ~91–97% of their variance; polynomials ~0%.
-- Neurons drift towards these shapes well before test accuracy jumps.
+![snap vs mould](figures/snap_vs_mould.png)
 
-**Side results:**
+The y-axis shows how much of the neuron's weights its 9 waves **cannot** explain (the "energy" is the sum of squared weights, so this is roughly 1 − R²). At the start it is 79%: random weights are not waves. Normal training (blue) slowly pushes this down to ~7%. Snapping (orange) drops it to 0%, but within ~2,000 steps the neuron has drifted back to ~7%, where normal training would have it anyway. Across all 298 neurons snapped in that run, the median at the end is ~6%. The wave module (green) holds it at 0% for good.
 
-- We tried **PCA** (principal component analysis) on the hidden layer. The number of directions needed to explain 99% of the variance drops from ~300 to ~25 as the network generalises. But no individual neuron goes idle: every neuron stays active and the structure is shared among them. So simply **pruning** (deleting) neurons does not help.
+### Step 3: a fair comparison
 
-  ![PCA](../reports/figures/pilot/pca_rank.png)
+A single run proves little, because each run groks at a slightly different time. So we compare **10 seeds** per version. A **seed** fixes the random choices of a run: the starting weights and which 30% of pairs are used for training. 10 seeds means 10 independent training runs of the same recipe. If a method is really faster, it should be faster for (nearly) every seed, not just on average.
 
-- The MLP's neurons are **square waves**, not smooth cosines. So the replacement function must allow harmonics (as in the green dashed line in the regression figure above), not just one cosine.
+How do scientists avoid fooling themselves? They ask: **what else could explain the result?** Then they design a **control experiment** in which that other explanation predicts something different. Our main worry: maybe the speed-up comes not from jumping to the *right* waves, but just from forcing the neuron to be *some* wave. The control: the **wrong frequency**. It uses the same trigger, the same neurons and the same moment, but each neuron gets a randomly chosen frequency that is *not* its own. If that helps just as much, "seeing where the network is heading" was not the reason.
 
-**In progress:** an online "probe" that runs the regression *during* training using training pairs only. After that come the actual replacement experiments.
+We added a second, more extreme control: make **every neuron a wave module at step 0**, before any training (with right and with wrong frequencies). At step 0 there is nothing to "see" yet.
 
-**What could realistically happen:**
+Two more fairness rules. The probe thresholds were tuned on 5 separate seeds (100–104) and fixed before the 10 final seeds were run, just like choosing settings on a validation set and not on the test set. And the probe never touches the test pairs.
 
-- **It helps:** grokking arrives clearly earlier than the seed spread, and the wrong-frequency control does not help. That would be a nice result.
-- **No effect:** the network may undo our replacement, or the early structure (only partly formed) may not be good enough to be useful. Related work ("grokking tickets") found that structure taken from the middle of training did not help.
-- **It helps for the wrong reason:** the wrong-frequency control helps just as much. Then the speed-up comes from something generic, like shrinking weights, not from "jumping to the answer". This is exactly why the controls are in the plan.
+## 7. What we found
 
-A negative result is still informative: it would tell us that seeing the destination early is not enough to get there faster.
+Each dot below is one seed, so one complete training run. The black bar is the median of the 10 seeds.
+
+![results dots](figures/results_dots.png)
+
+The measured test-accuracy curves (median of 10 seeds) for the first four versions:
+
+![jump measured](figures/jump_idea.png)
+
+**1. The jump works, and the mould beats the snap.** Normal training reaches 99% test accuracy at a median of **18,400** steps. The wave module needs **10,800**: **41% fewer**, and even its slowest seed (11,700) beats the fastest normal one (17,600). Snap once gives only **10%** (16,600). That fits the figure above: a snapped neuron drifts back, so most of the push is lost.
+
+**2. But the wrong frequency helps almost as much.** With wrong frequencies the wave module still needs only **12,350** steps (**33% fewer**). So most of the gain does not come from jumping to where the network was heading. It comes from forcing neurons to be waves *at all*. The right frequency adds a smaller but real extra (the wrong frequency is 14% slower than the right one).
+
+**Analogy: the formula sheet.** One teacher waits until a student has nearly worked out a formula, then confirms it ("yes, that's the one"). Another hands out a formula sheet on day one. Our experiment says: most of the benefit comes from the *kind* of formula on the sheet (waves), and only a little from it being the exact formula the student was about to find.
+
+**3. Waves from the start: 700 steps.** Making every neuron a wave module at step 0 groks after **~700 steps** instead of ~18,400, about 26× faster. With random frequencies it takes **~1,450**. This is no longer "accelerating training". We have built the shape of the answer into the network, so there is little left to discover. That is the real lesson. An assumption built into a model is called an **inductive bias** (or **prior**), and a good one can matter more than any training trick. You will meet the same idea later: convolutional networks for images build in "the same pattern can appear anywhere in the picture".
+
+A statistical test (the Mann–Whitney test, which asks how often a run from one group beats a run from the other) says that none of these differences is likely to be luck.
+
+**Honest framing.**
+
+- **No cheating with test data.** All fits use training inputs only.
+- **But we brought prior knowledge.** We chose waves as the replacement because section 5 told us the answer looks like waves. On a task whose answer is *not* clock-shaped, our wave module would be the wrong mould. The "wait and watch" probe is also beaten by imposing waves from the start, so on this task it is more useful as a microscope than as an accelerator.
+- **Limits.** One task, one network size, one training setting. We have not yet compared against known tricks such as **Grokfast**.
+
+**Along the way:** PCA (principal component analysis) of the hidden layer shows the number of directions needed for 99% of the variance dropping from ~300 to ~25 as the network generalises. But no single neuron goes idle, so simply deleting neurons does not help. And the neurons are **square waves**, not smooth cosines, which is why the wave module needs harmonics.
+
+![PCA](../reports/figures/pilot/pca_rank.png)
+
+### Next step (planned, not done yet)
+
+Make the method honest about its prior: a **generic fitter** that has to choose its own basis (waves, polynomials, or something else) from the data, instead of being told "use waves". Then test it where clock waves do not apply:
+
+- **Multiplication mod p** (on a clock, multiplying is not turning);
+- **permutation groups** (combining shuffles of a deck of cards, where order matters);
+- **sparse parity** (is the number of 1s among a few hidden bits even or odd?);
+- real data: **MNIST** (handwritten digits) and **QM9** (properties of small molecules).
+
+If the fitter finds useful structure there too, it is a real accelerator. If it only works on clock arithmetic, we have learned that the speed-up was mostly our own prior knowledge.
 
 ## 8. Things to try / discussion questions
 
@@ -173,28 +202,33 @@ A negative result is still informative: it would tell us that seeing the destina
 2. **Clock features by hand.** Make a 12 × 12 table and use as target y = cos(2π·((a + b) mod 12)/12), the answer's position on the clock. Fit it by least squares (`numpy.linalg.lstsq`) twice: once with features 1, a, b, a², ab, b², and once with features cos/sin(2πa/12), cos/sin(2πb/12) and their four products. Compare the R². Why is one of them perfect? (Hint: the angle-addition formula in section 5.)
 3. **Why 30%?** The project found that with 40–50% training data the delay mostly disappears. Why might more data make memorising less attractive compared with the rule?
 4. **Weight decay as a dial.** With weaker weight decay (0.3 instead of 1.0), grokking took longer (between steps 20k and 25k instead of 15k–20k). Explain this with the "tax on stored answers" analogy. What would you expect with no weight decay at all?
-5. **Fair comparison.** Suppose the jump method reaches 99% test accuracy at step 17,000 in one run, against 18,200 for normal training. Is that evidence that it works? What would you need to see?
+5. **Fair comparison.** Suppose the jump method reaches 99% test accuracy at step 17,000 in one run, against 18,200 for normal training. Is that evidence that it works? Look at the normal-training dots in the results figure of section 7: how far apart are the fastest and slowest seeds? What would you need to see?
 6. **Cheating check.** Why does it matter that the regression probe only uses training pairs? Describe how using test pairs could make the method look better than it is.
+7. **Design a control.** The wave module has 9 trainable numbers per input instead of 97. Maybe it is faster simply because it has fewer numbers to learn, not because they are waves. Design a control that tests this. What result would make you drop the "waves" explanation?
+8. **Prior or cheating?** "All waves from the start" groks in 700 steps. Is that a fair way to "speed up grokking"? What do you expect it to do on a task whose answer is not wave-shaped? Name another model you know that builds an assumption about the data into its design (hint: think of linear regression itself).
 
 ## 9. Glossary
 
 - **Accuracy:** share of examples where the network's top-scoring answer is correct.
-- **Controls:** extra experiments designed to rule out boring explanations (here, a wrong-frequency replacement).
+- **Control experiment:** an extra experiment designed so that a boring explanation of the result would show up there too (here: replacing neurons with the wrong frequency).
 - **Fourier features / waves:** cos(2πk·x/p) and sin(2πk·x/p). They describe where x sits on a clock with p hours when you go round k times.
 - **Frequency (k):** how many times a wave repeats as x goes from 0 to p.
 - **Generalise:** perform well on data not seen in training.
 - **Grokking:** test accuracy jumping to near 100% long after training accuracy did.
 - **Grokfast:** a known method to speed up grokking by amplifying the slow, consistent part of the gradient.
 - **Harmonic:** a wave at 2×, 3×, … the base frequency. Square waves are made of a base wave plus harmonics.
+- **Inductive bias:** an assumption built into a model's design that makes some solutions easier to learn than others (here: "each neuron is a wave").
 - **IQR (interquartile range):** the range covering the middle 50% of values.
 - **Loss:** the error the network minimises during training (here cross-entropy).
 - **MLP:** a network of fully-connected layers; ours has one hidden layer of 512 ReLU neurons.
 - **mod p:** the remainder after dividing by p ("clock arithmetic").
 - **Memorisation:** fitting the training data without learning a rule that transfers to new data.
 - **Neuron:** one unit in a hidden layer; here its output is ReLU(weight for a + weight for b + bias).
+- **Median:** the middle value when sorted; with 10 seeds, the average of the 5th and 6th. Unlike the mean, one odd run cannot drag it far.
 - **PCA:** principal component analysis, a way to find the few directions that explain most of the variance in data.
-- **Probe:** a small analysis (here a regression) used to look inside a trained network.
+- **Prior:** knowledge about the problem that you bring in before seeing the data; built into a model, it becomes an inductive bias.
+- **Probe:** a small analysis (here a regression) used to look inside a network, during or after training.
 - **R²:** share of variance explained by a regression; 1 is perfect, 0 is no better than the mean.
-- **Seed:** the number that fixes all random choices in a run; different seeds give different runs.
+- **Seed:** the number that fixes all random choices in a run (starting weights and which pairs go into the training set); different seeds give different runs. Running many seeds shows how much a result varies by chance.
 - **Transformer:** the network architecture behind modern language models; we use a tiny one-layer version as a second test case.
 - **Weight decay:** a penalty on large weights added to the loss, related to ridge regression.
