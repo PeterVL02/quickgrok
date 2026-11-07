@@ -44,3 +44,16 @@ Four neurons with different dominant frequencies, with a and b reordered by k·x
 - Neurons move gradually towards single-frequency forms during the plateau. The structure isn't only present at the end, so there is something to "jump" to early.
 - The trigger should use frequency concentration and held-out R² on a split of the **training** pairs, not raw R².
 - **Unknown, and the key risk:** whether the early, partial structure (top share ~0.2–0.35) is good enough to substitute. Grokking-tickets found transition-phase structure didn't help.
+
+## Result 3: PCA and pruning of the hidden layer (user idea, 2026-11-07)
+
+![pca](figures/pilot/pca_rank.png)
+
+The question: could we periodically run PCA on hidden activations to prune idle neurons or filter noise? We ran PCA on the activations of the 512 MLP neurons on the **training pairs** at every checkpoint (`uv run python scripts/pca_probe_pilot.py`).
+
+- **No idle neurons to prune.** About 130–150 neurons are dead at initialisation, but from step 500 on there are **zero** dead neurons and zero neurons below 1% of median variance, in every seed. Zeroing the 50% lowest-variance neurons cuts accuracy in every phase: test 0.27 → 0.14 on the plateau and 1.00 → ~0.56 after grokking.
+- **Compression is a rotation, not neurons switching off.** The number of principal components needed for 99% of variance falls from ~300 on the plateau to ~25 after grokking (participation ratio 30–35 → ~10). The low-dimensional structure is spread over all 512 neurons, which matches the Fourier picture: a few frequencies, each shared by many neurons.
+- **Timing.** The drop coincides with test accuracy starting to rise (seeds 0 and 1, ~3k steps before 99%). Seed 2 shows a slow decline from ~5k. Dimensionality is a marker of generalisation more than an early warning, so it is weaker than the top-frequency share in Result 2.
+- **Projection.** On the plateau, projecting activations onto the top PCs (99% variance) changes nothing (train 1.00, test within 0.005). As a one-off filter it neither helps nor hurts.
+
+Verdict: neuron pruning by activation variance is a dead end here. Repeatedly forcing low rank *during* training is untested. It would be a basis-free sibling of the planned weight projection (B), which matters for other datasets, so it is kept as a low-priority lead.
