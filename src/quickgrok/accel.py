@@ -123,7 +123,7 @@ class ProbeHook(Hook):
             features=self.features,
             pinv=self.pinv,
         )
-        n_k = (self.p - 1) // 2
+        n_k = self.p // 2
         shares = torch.tensor(
             [f["freq_shares"] or [math.nan] * n_k for f in fits], dtype=torch.float64
         )
@@ -381,7 +381,7 @@ class SubstitutionHook(ProbeHook):
         if not picks:
             return None
         neurons, fitted = [i for i, _ in picks], [k for _, k in picks]
-        n_k = (self.p - 1) // 2
+        n_k = self.p // 2
         ks = [
             self.rng.choice([j for j in range(1, n_k + 1) if j != k])
             if self.random_k

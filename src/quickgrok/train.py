@@ -25,7 +25,7 @@ from quickgrok.accel import (
     SubstitutionMode,
     effective_state_dict,
 )
-from quickgrok.data import Example, Operation, make_dataset
+from quickgrok.data import S5_ORDER, Example, Operation, make_dataset
 from quickgrok.models import (  # noqa: F401  (re-exported for `from quickgrok.train import ...`)
     Checkpoint,
     GrokMLP,
@@ -95,9 +95,11 @@ def train(
     than "none" it is a `SubstitutionHook` (thresholds `tau_share`, `tau_r2`) that also writes
     `out_dir/substitutions.jsonl` (see `SubstitutionHook` for `random_k` and `sub_all_at`).
     Checkpoints and `weight_norm` use the effective weights. With `stop_after_grok`, training
-    ends that many steps after test accuracy first reaches GROK_ACC.
+    ends that many steps after test accuracy first reaches GROK_ACC. For op "s5", `p` is
+    replaced by the number of symbols, `S5_ORDER`.
     """
     assert save_every % eval_every == 0, "save_every must be a multiple of eval_every"
+    p = S5_ORDER if op == "s5" else p
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(seed)
     train_set, val_set = make_dataset(p, op, train_frac, seed)
@@ -191,7 +193,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", choices=get_args(ModelName), default="transformer")
     parser.add_argument("--n-hidden", type=int, default=1, help="MLP hidden layers")
-    parser.add_argument("--p", type=int, default=97)
+    parser.add_argument("--p", type=int, default=97, help="ignored for --op s5")
     parser.add_argument("--op", choices=get_args(Operation), default="add")
     parser.add_argument("--train-frac", type=float, default=0.3)
     parser.add_argument("--steps", type=int, default=30000)
