@@ -4,8 +4,12 @@ Can grokking be made to happen sooner? This project trains small networks on mod
 
 ## Setup
 
-```
+```bash
 uv sync
 ```
 
 Torch is installed from the CUDA 13.2 wheel index (see `pyproject.toml`).
+
+## Usage
+
+See [docs/usage.md](docs/usage.md) for the command-line entry points, the Python API and how to plug the training hooks into your own PyTorch loop. Results are in `reports/`; a student-level walkthrough is in [intuition/README.md](intuition/README.md).
