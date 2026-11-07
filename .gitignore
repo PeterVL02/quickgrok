@@ -1,0 +1,20 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+*.pt
+runs/
+
+# Development specific files
+legal/
+research/
+tasks/
+
+CLAUDE.md
+PROGRESS.md
