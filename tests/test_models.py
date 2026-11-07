@@ -2,8 +2,8 @@
 
 import torch
 
+from quickgrok.models import GrokMLP, GrokTransformer, build_model
 from quickgrok.regress import make_grid, record_neurons
-from quickgrok.train import GrokMLP, GrokTransformer, build_model
 
 
 def test_record_neurons() -> None:

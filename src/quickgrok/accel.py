@@ -12,13 +12,13 @@ from typing import TypedDict
 import torch
 from torch import Tensor, nn
 
+from quickgrok.models import GrokMLP, GrokTransformer
 from quickgrok.regress import (
     build_features,
     fit_neurons,
     harmonic_share,
     record_activations,
 )
-from quickgrok.train import GrokMLP, GrokTransformer
 
 
 class Hook:

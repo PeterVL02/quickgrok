@@ -19,7 +19,7 @@ from typing import Literal, TypedDict, get_args
 import torch
 from torch import Tensor
 
-from quickgrok.train import GrokModel, get_activation_layers, load_model
+from quickgrok.models import GrokModel, get_activation_layers, load_model
 
 Basis = Literal["poly", "trig"]
 

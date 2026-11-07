@@ -10,8 +10,9 @@ from torch import nn
 
 from quickgrok.accel import Accelerator, Hook, ProbeHook
 from quickgrok.data import make_dataset
+from quickgrok.models import build_model
 from quickgrok.regress import fit_neurons, harmonic_share, make_grid
-from quickgrok.train import build_model, to_tensors
+from quickgrok.train import to_tensors
 
 
 def test_probe_split() -> None:

@@ -17,13 +17,14 @@ import torch
 from torch import Tensor
 
 from quickgrok.data import Operation, make_dataset
+from quickgrok.models import load_model
 from quickgrok.regress import (
     build_features,
     fit_neurons,
     make_grid,
     record_neurons,
 )
-from quickgrok.train import Metrics, load_model
+from quickgrok.train import Metrics
 
 # Reference palette (dataviz skill), light mode
 TRAIN, VAL = "#2a78d6", "#eb6834"
