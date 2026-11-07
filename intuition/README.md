@@ -1,10 +1,12 @@
 # Grokking, and can we make it happen sooner?
 
-*An intuition-first tour of the quickgrok project, written for second-semester data science students. Status as of 7 November 2026: **first results in, work in progress**.*
+*An intuition-first tour of the quickgrok project, written for second-semester data science students. Status as of 7 November 2026: **the speed-up experiments are finished; the most interesting question is still open (section 12)**.*
 
 You need: basic Python, mean and variance, linear regression with least squares, train/test splits and overfitting, and a rough idea of what a neural network is (layers, weights, ReLU, gradient descent). You do **not** need Fourier analysis. We build the little of it we need from a clock.
 
-All new figures come from `make_figures.py` in this folder (`uv run python intuition/make_figures.py` from the repo root). A few figures are borrowed from the project's research reports in `../reports/`.
+**Roadmap (about 45 minutes).** Sections 1–5: what grokking is and what the network learns (20 min). Sections 6–8: two ways to speed it up (10 min). Sections 9–10: the lesson that changed the project, a better-tuned baseline (10 min). Sections 11–12: what failed, and what is still open (5 min).
+
+All new figures come from `make_figures.py` in this folder (`uv run python intuition/make_figures.py` from the repo root; set `QUICKGROK_RUN_ROOTS` if the training runs live elsewhere). A few figures are borrowed from the project's research reports in `../reports/`.
 
 ---
 
@@ -22,7 +24,7 @@ Read the x-axis carefully: it is on a **log scale**, so each grid line means ten
 
 The network "got it" about 90 times later than it memorised. This delayed understanding is called **grokking** (from a science-fiction novel, where "to grok" means to understand something deeply). It was first reported in 2022 (Power et al.).
 
-The question behind this project: **can we make grokking happen sooner?** Short answer (section 7): yes, by 41% on this task, but *why* it works turned out to be the more interesting lesson. Before we get there, we need to understand the task, what "understanding" looks like inside the network, and why it takes so long.
+The question behind this project: **can we make grokking happen sooner?** Short answer: our two tricks cut the number of training steps by about 40% (sections 7–8). But simply training with a larger learning rate was faster still (section 9), and that turned out to be the most important lesson of the project. Before we get there, we need to understand the task, what "understanding" looks like inside the network, and why it takes so long.
 
 ## 2. The task: clock arithmetic with 97 hours
 
@@ -53,7 +55,7 @@ Both solutions have the same training loss (the error the network is minimising)
 
 **Analogy.** A student stores the answers to last year's exam word for word. That works on last year's exam. Now every word stored costs a little effort each day (weight decay). The cheapest way to keep passing last year's exam is eventually to understand the material, since a short explanation replaces hundreds of stored answers. This switch happens slowly, and that is why grokking is delayed.
 
-In numbers: in the run above, the total size of the weights (the square root of the sum of all squared weights) falls from about 316 at the start to about 124 at the moment of grokking.
+In numbers: in the run above, the total size of the weights (the square root of the sum of all squared weights, the **weight norm**) falls from about 316 at the start to about 124 at the moment of grokking. Keep this number in mind: in section 9 it explains why the learning rate and weight decay set the clock.
 
 ## 4. Looking inside: a neuron as a function of (a, b)
 
@@ -66,11 +68,7 @@ Because there are only 9,409 possible inputs, we can do something unusual: feed 
 - **Top row, normal order (a = 0, 1, 2, … down; b = 0, 1, 2, … across).** Before grokking (left), the neuron looks like noise. After grokking (right) it still looks like noise, just a more regular kind.
 - **Bottom row, same neuron, rows and columns re-ordered.** Here we sort a and b by the value of 35·x mod 97 (we explain where 35 comes from in section 5). Before grokking: still noise. After grokking: **one clean rectangle**. The neuron fires exactly when a is in a certain range *and* b is in a certain range, measured on a "frequency-35 clock".
 
-The neuron has learned something very simple. We just had to look at it with the right "lens". The project's report shows four such neurons at several points in training:
-
-![neuron maps from the report](../reports/figures/mlp_baseline/probe/neuron_maps.png)
-
-Look at the columns for step 14,000 and step 18,000: the rectangles are already there **before** test accuracy reaches 99% at step 18,200. Keep this in mind for section 6.
+The neuron has learned something very simple. We just had to look at it with the right "lens". In the project's report (`../reports/figures/mlp_baseline/probe/neuron_maps.png`) such rectangles are already visible at step 14,000, **before** test accuracy reaches 99% at step 18,200. Keep this in mind for section 6.
 
 ## 5. Why polynomials fail and waves work
 
@@ -84,9 +82,7 @@ Instead of writing a number x on a 12-hour clock as "x", write it as an **angle*
 - **Middle:** any angle is a point on the unit circle with coordinates (cos, sin). So the number 2 becomes the pair (cos(2π·2/12), sin(2π·2/12)) = (0.50, 0.87). This pair of numbers describes "2 on the clock" with no awkward jump from 11 back to 0.
 - **Right:** the same cosine, drawn along a number line, is a **wave** that repeats every 12. You can also go round the clock k times as x goes from 0 to 12. That is the wave cos(2π·k·x/12), and k is called its **frequency**.
 
-(The figure draws angles the way mathematicians do: 0 on the right, turning counter-clockwise. Real clocks start at the top and turn clockwise, but the idea is the same.)
-
-For our 97-hour clock, the building blocks are cos(2π·k·a/97) and sin(2π·k·a/97), and the same for b, for frequencies k = 1, 2, …, 48. These waves are the "Fourier features" you may hear about later in your studies. For now they are just "where a sits on the clock, read off as (cos, sin), when you go round k times".
+For our 97-hour clock, the building blocks are cos(2π·k·a/97) and sin(2π·k·a/97), and the same for b, for frequencies k = 1, 2, …, 48. These are the "Fourier features" you may meet later; for now they are just "where a sits on the clock when you go round k times".
 
 The one formula worth showing: adding angles has a known identity from school trigonometry,
 
@@ -110,15 +106,11 @@ Here is that comparison for a single neuron, using the weights that connect each
 - **Left, normal order:** the weights jump between two levels in a way that looks random. A degree-6 polynomial gives up and draws an almost flat line: **R² = 0.02**. A single wave with frequency 35 (blue circles) gets **R² = 0.83**. It looks scattered here only because the wave goes round the clock 35 times between 0 and 96.
 - **Right, re-ordered by 35·a mod 97:** the same points now form a **square wave**, one block high and one block low. A single cosine follows it well, and adding two "harmonics" (cosines at 2× and 3× the frequency) sharpens the corners: **R² = 0.86**.
 
-The same holds across the whole layer, measured on held-out data in the project's report:
+The same holds across the whole layer. Measured on held-out pairs over all 512 neurons (figure: `../reports/figures/mlp_baseline/probe/probe_r2.png`), **polynomial regression explains about 0%** of a neuron's variance throughout training, and **waves explain about 91%** after grokking (about 97% in a tiny transformer we also tried). Polynomials fail because they cannot wrap around: to a polynomial, 96 and 0 are far apart, while on the clock they are neighbours.
 
-![probe R²](../reports/figures/mlp_baseline/probe/probe_r2.png)
+Better still, the waves show up **early**. By about step 11,000, a quarter of the neurons already get more than 85% of their wave fit from a single frequency, when test accuracy is still below 50%. Some neurons are "done" thousands of steps before the network as a whole has generalised.
 
-The middle row shows the median R² over all 512 neurons. **Polynomial regression explains about 0%** throughout training. **Wave (Fourier) regression explains about 91%** after grokking (about 97% in the transformer model we also tried). Polynomials fail because they cannot wrap around: to a polynomial, 96 and 0 are far apart, while on the clock they are neighbours.
-
-The bottom row is the share of each neuron's explained variance that comes from its single best frequency. It climbs **long before** test accuracy jumps. In the shaded band (the middle 50% of neurons), the top quarter of neurons are already above 0.85 by about step 11,000, when test accuracy is still below 50%. Some neurons are "done" thousands of steps before the network as a whole has generalised.
-
-## 6. The idea, and how we tested it
+## 6. Idea 1: jump to the wave shape, and how we tested it
 
 **Analogy.** You are hiking in fog towards a summit. The path zig-zags slowly upwards. At some point the fog lifts for a moment and you see the summit. You could keep following the zig-zag, or you could walk straight towards it.
 
@@ -143,7 +135,7 @@ At the moment of the swap the two versions give exactly the same network. They d
 
 ![snap vs mould](figures/snap_vs_mould.png)
 
-The y-axis shows how much of the neuron's weights its 9 waves **cannot** explain (the "energy" is the sum of squared weights, so this is roughly 1 − R²). At the start it is 79%: random weights are not waves. Normal training (blue) slowly pushes this down to ~7%. Snapping (orange) drops it to 0%, but within ~2,000 steps the neuron has drifted back to ~7%, where normal training would have it anyway. Across all 298 neurons snapped in that run, the median at the end is ~6%. The wave module (green) holds it at 0% for good.
+The y-axis shows how much of the neuron's weights its 9 waves **cannot** explain (roughly 1 − R²). At the start it is 79%: random weights are not waves. Normal training (blue) slowly pushes this down to ~7%. Snapping (orange) drops it to 0%, but within ~2,000 steps the neuron has drifted back to ~7%, where normal training would have it anyway. The wave module (green) holds it at 0% for good.
 
 ### Step 3: a fair comparison
 
@@ -155,7 +147,9 @@ We added a second, more extreme control: make **every neuron a wave module at st
 
 Two more fairness rules. The probe thresholds were tuned on 5 separate seeds (100–104) and fixed before the 10 final seeds were run, just like choosing settings on a validation set and not on the test set. And the probe never touches the test pairs.
 
-## 7. What we found
+## 7. What we found (first round, at the original settings)
+
+All runs in this section use the training settings we inherited from our first pilot experiment: learning rate 0.001 and weight decay 1. Remember that; section 9 is about it.
 
 Each dot below is one seed, so one complete training run. The black bar is the median of the 10 seeds.
 
@@ -178,57 +172,163 @@ A statistical test (the Mann–Whitney test, which asks how often a run from one
 **Honest framing.**
 
 - **No cheating with test data.** All fits use training inputs only.
-- **But we brought prior knowledge.** We chose waves as the replacement because section 5 told us the answer looks like waves. On a task whose answer is *not* clock-shaped, our wave module would be the wrong mould. The "wait and watch" probe is also beaten by imposing waves from the start, so on this task it is more useful as a microscope than as an accelerator.
-- **Limits.** One task, one network size, one training setting. We have not yet compared against known tricks such as **Grokfast**.
+- **But we brought prior knowledge.** We chose waves as the replacement because section 5 told us the answer looks like waves. On a task whose answer is *not* clock-shaped, our wave module would be the wrong mould (section 11 tests this).
+- **One task, one network size, one training setting.** That last limit turned out to matter most (section 9).
 
-**Along the way:** PCA (principal component analysis) of the hidden layer shows the number of directions needed for 99% of the variance dropping from ~300 to ~25 as the network generalises. But no single neuron goes idle, so simply deleting neurons does not help. And the neurons are **square waves**, not smooth cosines, which is why the wave module needs harmonics.
+## 8. Idea 2: forecast the weights ("nowcasting")
 
-![PCA](../reports/figures/pilot/pca_rank.png)
+The wave module needs to know that the answer is made of waves. Can we speed up grokking *without* knowing anything about the task?
 
-### Next step (planned, not done yet)
+Section 3 said that the long plateau is weight decay slowly moving the weights. Slow, steady movement is easy to predict. So here is the idea, which we call **nowcasting**: if every weight is drifting in a straight line, draw that line and jump ahead along it.
 
-Make the method honest about its prior: a **generic fitter** that has to choose its own basis (waves, polynomials, or something else) from the data, instead of being told "use waves". Then test it where clock waves do not apply:
+![nowcast idea](figures/nowcast_idea.png)
 
-- **Multiplication mod p** (on a clock, multiplying is not turning);
-- **permutation groups** (combining shuffles of a deck of cards, where order matters);
-- **sparse parity** (is the number of 1s among a few hidden bits even or odd?);
-- real data: **MNIST** (handwritten digits) and **QM9** (properties of small molecules).
+The recipe, for each of the network's ~150,000 weights separately:
 
-If the fitter finds useful structure there too, it is a real accelerator. If it only works on clock arithmetic, we have learned that the speed-up was mostly our own prior knowledge.
+1. Every 100 steps, save a snapshot of the weight.
+2. Every 1,000 steps, fit a straight line (least squares, as in your course) through the last 8 snapshots of each weight, and move the weight to where its line will be 1,000 steps from now.
+3. **Check the jump.** If the training loss after the jump is more than 1.5 times the loss before it, undo the jump and carry on as if nothing happened.
 
-## 8. Things to try / discussion questions
+The figure shows the idea with 3 weights of one normal run (for the picture we use the checkpoints saved every 500 steps). For the orange and green weights the line lands close to where training actually went. For the blue weight it overshoots, because the weight is about to stop moving. That is why step 3 exists: a jump that makes the network worse on its own training data is thrown away. About 70% of the jumps were kept.
+
+Note what the method does **not** use: no test data, no grokked network to copy from, and no knowledge that the task is about clocks. It only uses the run's own recent past.
+
+**Results at the original settings** (10 seeds each, steps to 99% test accuracy, median):
+
+| Version | Steps | Fewer steps than normal training |
+|---|---|---|
+| normal training | 18,400 | — |
+| **nowcast, straight line** | **11,150** | **39%** |
+| nowcast, a small neural network (LSTM) as forecaster | 11,350 | 38% (no better than the line) |
+| only shrink each weight tensor to its forecast size, keep its direction | 18,400 | 0% |
+| Grokfast (a published speed-up trick) | 18,350 | 0% |
+
+Three lessons hide in this table:
+
+- **A better forecast is not a better accelerator.** The LSTM predicts the weights twice as accurately as the straight line, but it groks no sooner. Fancy is not automatically better.
+- **Direction matters, not just size.** The "shrink only" control gives each group of weights the size the forecast predicts, but keeps the direction they point in. It does nothing. So nowcasting works because it moves the weights the way they were heading, not just because it makes them smaller.
+- **Published tricks do not always transfer.** Grokfast gave 0% in our setting. That does not mean the paper is wrong: its gains were reported with other settings.
+
+So both of our ideas cut about 40% of the steps. That is where we would have liked to write "success". Then we checked our baseline.
+
+## 9. The baseline lesson: tune the thing you compare against
+
+Every comparison so far used learning rate 0.001 and weight decay 1. We never chose those numbers for speed: we inherited them from the pilot experiment. Settings like these, which you pick before training rather than learn from the data, are called **hyperparameters**. So we ran normal training (no tricks at all) on a grid of learning rates and weight decays, 5 seeds each:
+
+![baseline lesson](figures/baseline_lesson.png)
+
+- **Grokking time falls roughly as 1 / (learning rate × weight decay).** Going along the x-axis, each doubling of lr × wd roughly halves the number of steps (the dashed line). From our original baseline at **17,900** steps, the fastest setting needs about **1,000**: about 18 times faster.
+- **Simply doubling the learning rate beats both of our methods.** With learning rate 0.002 and weight decay 1, normal training groks after **8,700** steps. Our two methods needed 10,800 (wave module) and 11,150 (nowcast) at the old setting: the dotted horizontal lines.
+- **It is a rule of thumb, not a law.** At the smallest learning rate, doubling the weight decay did *not* help (green line, left: 19,800 steps). The curve flattens out near 1,000 steps. And with weight decay 4, most runs never grokked within 40,000 steps: the tax was too high.
+- It is still grokking: every setting memorises within 100–200 steps and generalises 10–40 times later.
+
+**Why does weight decay set the clock?** The training algorithm we use (AdamW) does two things at every step:
+
+1. it nudges each weight in the direction that lowers the loss, by an amount of about the learning rate;
+2. it shrinks every weight by the fraction **lr × wd**. With lr = 0.001 and wd = 1, that is 0.1% per step.
+
+Section 3 said that the network switches to the rule once its weights are small enough (weight norm about 124 here). The nowcasting runs confirm this: whether a run jumps or not, it passes 99% test accuracy at the same weight norm, about 124. So the plateau is mostly *waiting for the weights to shrink*. Double the shrink per step, and you get there in about half the steps. **Analogy:** a bank account with negative interest. How long it takes to fall below some amount depends mainly on the interest rate, and lr × wd is that rate.
+
+This also explains part of nowcasting's success. Its jumps go where the weights were drifting anyway, so they act a bit like a higher weight decay, learned on the fly.
+
+**This was known.** Other groups have measured the same dependence of grokking time on learning rate and weight decay: Pracher et al. 2026 (arXiv 2609.26679), Lyu et al. (ICLR 2024) and Xu et al. (ICML 2026). The "the weights must shrink into a good range" picture is also the explanation proposed by Omnigrok (Liu et al., 2023). A literature search before our first comparisons would have saved us a detour.
+
+**The lesson.** "Our method is 40% faster" means nothing if the baseline was slow for a boring reason. Before you claim a speed-up, **tune the baseline** at least as carefully as your own method. This is one of the most common mistakes in machine-learning papers, so do not feel bad when you catch yourself making it. Catching it is the point.
+
+## 10. Re-test on the tuned baseline: steps vs seconds
+
+Fair question: do our methods still help **on top of** a well-tuned baseline? We re-ran everything at learning rate 0.004 and weight decay 2, where normal training groks after about 2,900 steps. The methods' own settings (how often to probe, how far to jump) were re-tuned on 5 separate seeds first, then fixed for the 10 final seeds.
+
+![tuned results](figures/tuned_results.png)
+
+| Version | Steps to 99% (median of 10 seeds) | Steps saved | Wall-clock vs normal training |
+|---|---|---|---|
+| normal training | 2,920 | — | ×1.00 |
+| nowcast | 1,840 | 37% | **×0.80 (faster)** |
+| wave module | 1,620 | 45% | ×1.53 (slower) |
+| wave module, wrong frequency | 2,030 | 30% | ×1.90 (slower) |
+| nowcast + wave module | 1,420 | 51% | ×1.50 (slower) |
+
+(Normal training took 2,600 steps in the grid of section 9 and 2,920 here because these are different seeds; all comparisons in this table use the same 10 seeds.)
+
+- **In steps, both methods still help about as much as before** (nowcast 37%, was 39%; wave module 45%, was 41%). Tuning the baseline and our tricks seem to shorten different parts of the plateau.
+- The right frequency still beats the wrong one (1,620 vs 2,030 steps), and the two methods **combine**, though less than you would hope: 51%, not the ~65% you would get if the two speed-ups multiplied.
+- **At the very fastest setting** (learning rate 0.016, about 920 steps), the gains shrink to **11%** (nowcast) and **24%** (wave module).
+
+**Steps vs seconds.** A step is not a fixed amount of time. A normal training step of this tiny network takes 0.74 milliseconds on our GPU. The wave module adds work: every 100 steps it fits a regression to all 512 neurons (30–50 ms each time), and once ~270 neurons are reshaped, every step is about 57% slower. So the wave module saves 45% of the *steps* but takes 53% *more seconds*. Nowcasting is nearly free (a few snapshots and one line fit per jump), so it is the only method that actually saves time: 20% at learning rate 0.004, and nothing at 0.016. Which number to report depends on the question: steps tell you about the learning dynamics, seconds tell you whether anyone should use the method. A paper that reports only one of them can mislead.
+
+## 11. Can the method find the shape by itself? (No)
+
+The wave module only works because *we* told it "use waves". To make it honest, we tried shapes that know nothing about the task, and let the method fit each neuron with them. We also added two tasks where clock waves in a and b are the wrong shape: **a · b mod 97** and combining shuffles of 5 cards (**permutations**). On these, the wave probe never fires.
+
+The task-blind shapes we tried, and what happened (mostly single training runs, so these are feasibility checks, not precise numbers):
+
+- **Global SVD** (a few directions shared by all neurons, found by the singular value decomposition, the maths behind PCA). It **never fires**: no small set of shared directions describes the neurons, because they use many different frequencies.
+- **"Pick the best shape per neuron"** from waves, polynomials and SVD. It helped on a + b, but only because it picked waves for 116 of 117 neurons. That is our prior again, found in a roundabout way.
+- **Level sets** (each weight column takes only 2–3 distinct values). These light up on **every** task within ~2,000 steps, at the memorising stage, including a + b, where we know the true shape is waves. So they reflect how the optimizer moves the weights, not the task. Freezing neurons onto them makes test accuracy stall at **~95%** and never reach 99%.
+- **Self-expression** (describe each neuron with a few other neurons). Test accuracy also **stalls in the mid-90s**. On a · b it eventually reaches 99%, but 2.6 times later than normal training.
+
+The likely reason, for both: the shapes are copied from a network that is still changing, and freezing a neuron onto an unfinished shape takes away the freedom it needs for the last stretch.
+
+**Lesson.** Replacing neurons with a fixed shape only works when you already know the right shape. That is **prior knowledge, not discovery**. The 700-step "all waves from the start" result of section 7 says the same thing from the other side.
+
+## 12. The honest verdict so far, and the open question
+
+We asked a five-perspective review panel (we called it the "council") to judge where the project stands. Its verdict:
+
+- **The speed-up angle is not the interesting part.** A tuned learning rate and weight decay beat our tricks at the original setting, and the one trick that is faster in seconds (nowcasting) saves 20% at best.
+- **The Fourier probe is close to circular.** It finds the wave structure because we told it to look for waves.
+
+What *might* be interesting is the probe as a **monitor**. Section 6 showed that some neurons become wave-shaped long before test accuracy moves. So the open question is:
+
+> Can a signal computed only from training data predict **whether and when** a run will generalise, better than cheap baselines such as the weight norm or the 1 / (lr × wd) rule of thumb?
+
+Answering this properly needs a **pre-registered** test: write down the prediction rule, the baselines and the success criterion *before* running the experiment, and include runs that never grok (for example weight decay 4, or the card-shuffling task with 30% training data), so a monitor that always says "it will grok" cannot look good. We have not run this test, and we do not know the answer.
+
+## 13. Things to try / discussion questions
 
 1. **Overfitting revisited.** In your course, the advice for overfitting is "stop training when test error starts going up" (early stopping). What would early stopping have done in the training run of section 1? When is it the wrong advice?
 2. **Clock features by hand.** Make a 12 × 12 table and use as target y = cos(2π·((a + b) mod 12)/12), the answer's position on the clock. Fit it by least squares (`numpy.linalg.lstsq`) twice: once with features 1, a, b, a², ab, b², and once with features cos/sin(2πa/12), cos/sin(2πb/12) and their four products. Compare the R². Why is one of them perfect? (Hint: the angle-addition formula in section 5.)
 3. **Why 30%?** The project found that with 40–50% training data the delay mostly disappears. Why might more data make memorising less attractive compared with the rule?
-4. **Weight decay as a dial.** With weaker weight decay (0.3 instead of 1.0), grokking took longer (between steps 20k and 25k instead of 15k–20k). Explain this with the "tax on stored answers" analogy. What would you expect with no weight decay at all?
+4. **Weight decay as a dial.** Use the "shrink by lr × wd per step" picture of section 9 to predict what happens with no weight decay at all. Then explain why weight decay 4 never grokked: what does a very high tax do to the rule itself?
 5. **Fair comparison.** Suppose the jump method reaches 99% test accuracy at step 17,000 in one run, against 18,200 for normal training. Is that evidence that it works? Look at the normal-training dots in the results figure of section 7: how far apart are the fastest and slowest seeds? What would you need to see?
 6. **Cheating check.** Why does it matter that the regression probe only uses training pairs? Describe how using test pairs could make the method look better than it is.
 7. **Design a control.** The wave module has 9 trainable numbers per input instead of 97. Maybe it is faster simply because it has fewer numbers to learn, not because they are waves. Design a control that tests this. What result would make you drop the "waves" explanation?
-8. **Prior or cheating?** "All waves from the start" groks in 700 steps. Is that a fair way to "speed up grokking"? What do you expect it to do on a task whose answer is not wave-shaped? Name another model you know that builds an assumption about the data into its design (hint: think of linear regression itself).
+8. **Prior or cheating?** "All waves from the start" groks in 700 steps. Is that a fair way to "speed up grokking"? Name another model you know that builds an assumption about the data into its design (hint: think of linear regression itself).
+9. **Why must you tune the baseline before claiming a speed-up?** Our methods saved ~40% of the steps at the old setting, and doubling the learning rate saved 51%. Write the one-sentence claim we could honestly have made before section 9, and the one we can make after it. How much tuning effort should a baseline get compared with your own method?
+10. **Steps vs seconds: which should we report?** The wave module saves 45% of the steps but costs 53% more time. Give one reader for whom steps are the right number and one for whom seconds are. Would the answer change for a network a thousand times larger, where each step is much more expensive?
 
-## 9. Glossary
+## 14. Glossary
 
 - **Accuracy:** share of examples where the network's top-scoring answer is correct.
+- **AdamW:** the training algorithm we use; a version of gradient descent that also shrinks every weight by lr × wd at each step.
+- **Baseline:** the standard method you compare against (here: normal training).
+- **Baseline tuning:** choosing the baseline's hyperparameters as carefully as your own method's, so that a speed-up is not just a badly-set baseline.
 - **Control experiment:** an extra experiment designed so that a boring explanation of the result would show up there too (here: replacing neurons with the wrong frequency).
 - **Fourier features / waves:** cos(2πk·x/p) and sin(2πk·x/p). They describe where x sits on a clock with p hours when you go round k times.
 - **Frequency (k):** how many times a wave repeats as x goes from 0 to p.
 - **Generalise:** perform well on data not seen in training.
 - **Grokking:** test accuracy jumping to near 100% long after training accuracy did.
-- **Grokfast:** a known method to speed up grokking by amplifying the slow, consistent part of the gradient.
+- **Grokfast:** a published method to speed up grokking by amplifying the slow, consistent part of the gradient. It did not help in our setting.
 - **Harmonic:** a wave at 2×, 3×, … the base frequency. Square waves are made of a base wave plus harmonics.
+- **Hyperparameter:** a setting chosen before training rather than learned from the data, such as the learning rate, the weight decay or the network size.
 - **Inductive bias:** an assumption built into a model's design that makes some solutions easier to learn than others (here: "each neuron is a wave").
 - **IQR (interquartile range):** the range covering the middle 50% of values.
+- **Learning rate (lr):** how big a step gradient descent takes at each update.
 - **Loss:** the error the network minimises during training (here cross-entropy).
 - **MLP:** a network of fully-connected layers; ours has one hidden layer of 512 ReLU neurons.
 - **mod p:** the remainder after dividing by p ("clock arithmetic").
 - **Memorisation:** fitting the training data without learning a rule that transfers to new data.
-- **Neuron:** one unit in a hidden layer; here its output is ReLU(weight for a + weight for b + bias).
 - **Median:** the middle value when sorted; with 10 seeds, the average of the 5th and 6th. Unlike the mean, one odd run cannot drag it far.
+- **Neuron:** one unit in a hidden layer; here its output is ReLU(weight for a + weight for b + bias).
+- **Nowcasting:** our name for forecasting each weight from its own recent history (here with a straight line) and jumping ahead, keeping the jump only if the training loss does not get much worse.
 - **PCA:** principal component analysis, a way to find the few directions that explain most of the variance in data.
+- **Pre-registration:** writing down the hypothesis, the analysis and the success criterion before running an experiment, so the result cannot quietly change what counts as success.
 - **Prior:** knowledge about the problem that you bring in before seeing the data; built into a model, it becomes an inductive bias.
 - **Probe:** a small analysis (here a regression) used to look inside a network, during or after training.
 - **R²:** share of variance explained by a regression; 1 is perfect, 0 is no better than the mean.
 - **Seed:** the number that fixes all random choices in a run (starting weights and which pairs go into the training set); different seeds give different runs. Running many seeds shows how much a result varies by chance.
 - **Transformer:** the network architecture behind modern language models; we use a tiny one-layer version as a second test case.
-- **Weight decay:** a penalty on large weights added to the loss, related to ridge regression.
+- **Wall-clock time:** the real time a run takes, in seconds, as a clock on the wall would measure it. It includes all extra work a method does, unlike a count of training steps.
+- **Weight decay (wd):** a penalty on large weights, related to ridge regression; in AdamW it shrinks every weight by lr × wd per step.
+- **Weight norm:** the overall size of the weights: the square root of the sum of all squared weights.

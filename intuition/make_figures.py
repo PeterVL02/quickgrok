@@ -1,10 +1,15 @@
 """Make the teaching figures for intuition/README.md.
 
 Run from the repo root: uv run python intuition/make_figures.py
-Reads (CPU only) runs/mlp_baseline/seed0/ and runs/t6/ and writes PNGs to intuition/figures/.
+Reads (CPU only) mlp_baseline/seed0, t6, tuned_vanilla and tuned_retest under the run roots,
+and writes PNGs to intuition/figures/. The run roots default to ./runs. To read runs kept
+elsewhere (for example in other git worktrees), set QUICKGROK_RUN_ROOTS to folders separated
+by os.pathsep (";" on Windows, ":" elsewhere). A figure whose runs are missing is skipped
+with a warning.
 """
 
 import json
+import os
 from pathlib import Path
 
 import matplotlib
@@ -20,8 +25,21 @@ from quickgrok.data import make_dataset
 from quickgrok.models import load_model
 
 ROOT = Path(__file__).resolve().parent.parent
-RUN = ROOT / "runs" / "mlp_baseline" / "seed0"
-T6 = ROOT / "runs" / "t6"
+RUN_ROOTS = [
+    Path(p)
+    for p in os.environ.get("QUICKGROK_RUN_ROOTS", str(ROOT / "runs")).split(os.pathsep)
+    if p
+]
+RUN = "mlp_baseline/seed0"  # run folders, relative to a run root
+T6 = "t6"
+TUNED_ARMS = {  # runs/tuned_retest folder -> label, wall-clock to 99% × vanilla
+    "vanilla": ("normal training", 1.00),
+    "nowcast_linear": ("nowcast", 0.80),
+    "module": ("wave module", 1.53),
+    "module_random_k": ("wave module, wrong frequency", 1.90),
+    "nowcast_plus_module": ("nowcast + wave module", 1.50),
+}  # wall-clock: reports/tuned_retest.md, seeds 0-2 run alone, start-up removed
+OLD_SETTING_METHODS = {"nowcast": 11_150, "wave module": 10_800}  # lr 1e-3, wd 1
 ARMS = {  # run folder -> plain-language label, in plotting order
     "vanilla": "normal training",
     "project": "snap once",
@@ -82,9 +100,21 @@ def save(fig: plt.Figure, name: str) -> None:
     print(f"wrote {OUT / name}")
 
 
+def find_run(rel: str) -> Path:
+    """Return the folder `rel` under the first run root that has it.
+
+    Raises:
+        FileNotFoundError: if no run root contains `rel`.
+    """
+    for root in RUN_ROOTS:
+        if (root / rel).exists():
+            return root / rel
+    raise FileNotFoundError(f"{rel} not found under {[str(r) for r in RUN_ROOTS]}")
+
+
 def load_input_weights(step: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return the MLP's input weights U (p, n), V (p, n) and hidden bias (n,) at a checkpoint."""
-    model, _ = load_model(RUN / f"step_{step:06d}.pt")
+    model, _ = load_model(find_run(RUN) / f"step_{step:06d}.pt")
     sd = model.state_dict()
     return (
         sd["embed_a.weight"].double().numpy(),
@@ -283,7 +313,7 @@ def plot_table_split() -> None:
 
 def plot_story_curve() -> None:
     """Train vs test accuracy of MLP seed 0 on a log step axis, with the two phases marked."""
-    hist = json.loads((RUN / "metrics.json").read_text())
+    hist = json.loads((find_run(RUN) / "metrics.json").read_text())
     hist = [h for h in hist if h["step"] > 0]
     steps = np.array([h["step"] for h in hist])
     train = np.array([h["train_acc"] for h in hist])
@@ -464,7 +494,7 @@ def plot_jump_idea() -> None:
     fig, ax = plt.subplots(figsize=(9, 5))
     for (arm, label), color in zip(list(ARMS.items())[:4], COLOURS):
         curves = []
-        for run in sorted((T6 / arm).glob("seed*")):
+        for run in sorted(find_run(f"{T6}/{arm}").glob("seed*")):
             steps, test = load_history(run)
             # A run stops 3,000 steps after grokking; hold its last value after that.
             curves.append(np.interp(grid, steps, test))
@@ -488,13 +518,16 @@ def plot_jump_idea() -> None:
     save(fig, "jump_idea.png")
 
 
-def plot_results_dots() -> None:
-    """Steps to 99% test accuracy per seed for the six arms, median marked."""
-    fig, ax = plt.subplots(figsize=(10, 5.4))
+def draw_seed_dots(ax: plt.Axes, rows: list[tuple[str, list[Path]]], dx: float) -> None:
+    """Draw one row per arm: steps to 99% per seed as dots, the median as a black bar.
+
+    Each median is labelled with its % fewer steps than the first row; `dx` is the label's
+    x offset from the bar, in steps.
+    """
     rng = np.random.default_rng(0)
     base = None
-    for row, ((arm, label), color) in enumerate(zip(ARMS.items(), COLOURS)):
-        steps = np.array([grok_step(r) for r in sorted((T6 / arm).glob("seed*"))])
+    for row, ((label, runs), color) in enumerate(zip(rows, COLOURS)):
+        steps = np.array([grok_step(r) for r in runs])
         y = -row + rng.uniform(-0.15, 0.15, len(steps))  # jitter so equal steps show
         ax.plot(steps, y, "o", color=color, ms=6, mec="white", mew=0.8)
         med = float(np.median(steps))
@@ -503,12 +536,22 @@ def plot_results_dots() -> None:
         note = f"median {med:,.0f}" + (
             "" if row == 0 else f"  ({1 - med / base:.0%} fewer)"
         )
-        ax.text(med + 250, -row + 0.3, note, fontsize=9, va="bottom")
+        ax.text(med + dx, -row + 0.3, note, fontsize=9, va="bottom")
     ax.plot([], [], "o", color=MUTED, ms=6, label="one seed (one training run)")
-    ax.plot([], [], color=INK, lw=2, label="median of 10 seeds")
-    ax.set_yticks(-np.arange(len(ARMS)), list(ARMS.values()))
+    ax.plot([], [], color=INK, lw=2, label=f"median of {len(rows[0][1])} seeds")
+    ax.set_yticks(-np.arange(len(rows)), [label for label, _ in rows])
     ax.tick_params(axis="y", labelsize=10, colors=INK)
-    ax.set_ylim(-len(ARMS) + 0.4, 0.8)
+    ax.set_ylim(-len(rows) + 0.4, 0.8)
+
+
+def plot_results_dots() -> None:
+    """Steps to 99% test accuracy per seed for the six arms, median marked."""
+    fig, ax = plt.subplots(figsize=(10, 5.4))
+    rows = [
+        (label, sorted(find_run(f"{T6}/{arm}").glob("seed*")))
+        for arm, label in ARMS.items()
+    ]
+    draw_seed_dots(ax, rows, dx=250)
     ax.set_xlim(0, 21_000)
     ax.set_xlabel("training steps until test accuracy ≥ 99% (fewer is faster)")
     ax.set_title("How long each version takes to grok (10 seeds each)")
@@ -545,7 +588,7 @@ def plot_snap_vs_mould() -> None:
     neuron, k, swap = SWAP_NEURON
     fig, axes = plt.subplots(1, 2, figsize=(14, 4.8), gridspec_kw={"wspace": 0.2})
     for arm, color in zip(list(ARMS)[:3], COLOURS):
-        steps, share = outside_share(T6 / arm / "seed0", neuron, k)
+        steps, share = outside_share(find_run(f"{T6}/{arm}/seed0"), neuron, k)
         if (
             arm != "vanilla"
         ):  # checkpoints are saved just before the swap; right after it is 0
@@ -570,16 +613,210 @@ def plot_snap_vs_mould() -> None:
     save(fig, "snap_vs_mould.png")
 
 
+def plot_baseline_lesson() -> None:
+    """Plain training: median steps to 99% test accuracy vs lr × wd (log-log), one line per wd."""
+    root = find_run("tuned_vanilla")
+    fig, ax = plt.subplots(figsize=(9.5, 5.6))
+    for wd, color in zip((0.5, 1.0, 2.0), COLOURS):
+        xs, meds = [], []
+        for folder in sorted(root.glob(f"lr*_wd{wd}")):
+            lr = float(folder.name.removeprefix("lr").split("_wd")[0])
+            hists = [load_history(r) for r in sorted(folder.glob("seed*"))]
+            if not all((test >= 0.99).any() for _, test in hists):
+                print(f"warning: not every seed grokked at lr {lr:g}, wd {wd:g}")
+                continue
+            steps = [int(s[np.argmax(t >= 0.99)]) for s, t in hists]
+            ax.plot([lr * wd] * len(steps), steps, "o", color=color, ms=4, alpha=0.3)
+            xs.append(lr * wd)
+            meds.append(float(np.median(steps)))
+        order = np.argsort(xs)
+        ax.plot(
+            np.array(xs)[order],
+            np.array(meds)[order],
+            "o-",
+            color=color,
+            lw=2,
+            ms=7,
+            label=f"weight decay {wd:g} (lr 1e-3 … 1.6e-2)",
+        )
+    x = np.array([0.0008, 0.04])
+    ax.plot(x, 17.9 / x, color=MUTED, ls="--", lw=1, label="∝ 1 / (lr × wd)")
+    for (name, steps), color, va in zip(
+        OLD_SETTING_METHODS.items(), COLOURS[3:], ("bottom", "top")
+    ):
+        ax.axhline(steps, color=color, lw=1.5, ls=":")
+        ax.text(
+            0.033,
+            steps * (1.04 if va == "bottom" else 0.96),
+            f"{name} at the old setting: {steps:,}",
+            color=color,
+            ha="right",
+            va=va,
+            fontsize=9,
+        )
+    ax.annotate(
+        "our original baseline\nlr 1e-3, wd 1: 17,900",
+        xy=(0.001, 17_900),
+        xytext=(0.00125, 30_000),
+        arrowprops={"arrowstyle": "-|>", "color": INK, "lw": 1},
+        fontsize=9,
+    )
+    ax.annotate(
+        "just double the learning rate:\n8,700",
+        xy=(0.002, 8_700),
+        xytext=(0.00085, 2_600),
+        arrowprops={"arrowstyle": "-|>", "color": INK, "lw": 1},
+        fontsize=9,
+    )
+    ax.text(
+        0.0042,
+        24_000,
+        "best setting (lr 1.6e-2, wd 2): ~1,000 steps\n"
+        "weight decay 4 (not shown): most seeds never grok within 40k steps",
+        color=MUTED,
+        fontsize=9,
+    )
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ticks = [0.001, 0.002, 0.004, 0.008, 0.016, 0.032]
+    ax.set_xticks(ticks, [f"{t:g}" for t in ticks])
+    yticks = [500, 1_000, 2_000, 5_000, 10_000, 20_000, 40_000]
+    ax.set_yticks(yticks, [f"{t:,}" for t in yticks])
+    ax.minorticks_off()
+    ax.set_xlim(0.0008, 0.04)
+    ax.set_ylim(500, 50_000)
+    ax.set_xlabel("learning rate × weight decay (log scale)")
+    ax.set_ylabel("steps until test accuracy ≥ 99% (log scale)")
+    ax.set_title(
+        "Plain training, 5 seeds per setting (faint dots), median connected: "
+        "the old baseline was slow"
+    )
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=2, fontsize=9)
+    style_axes(ax)
+    save(fig, "baseline_lesson.png")
+
+
+def plot_tuned_results() -> None:
+    """Tuned setting (lr 4e-3, wd 2): steps to 99% per seed, and wall-clock vs normal training."""
+    rows = [
+        (label, sorted(find_run(f"tuned_retest/{arm}").glob("seed*")))
+        for arm, (label, _) in TUNED_ARMS.items()
+    ]
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(14, 5.2),
+        sharey=True,
+        gridspec_kw={"width_ratios": [2, 1], "wspace": 0.08},
+    )
+    ax = axes[0]
+    draw_seed_dots(ax, rows, dx=30)
+    ax.set_xlim(0, 3_600)
+    ax.set_xlabel("training steps until test accuracy ≥ 99% (fewer is better)")
+    ax.set_title("Steps: every method still helps on the tuned baseline")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=2, fontsize=9)
+
+    ax = axes[1]
+    for row, ((label, ratio), color) in enumerate(zip(TUNED_ARMS.values(), COLOURS)):
+        ax.barh(-row, ratio, height=0.5, color=color)
+        note = "" if row == 0 else ("  faster" if ratio < 1 else "  slower")
+        ax.text(
+            max(ratio, 1) + 0.03, -row, f"×{ratio:.2f}{note}", va="center", fontsize=9
+        )
+    ax.axvline(1, color=INK, lw=1)
+    ax.set_xlim(0, 2.4)
+    ax.set_xlabel("wall-clock seconds to 99% (× normal training)")
+    ax.set_title("Seconds (3 seeds, run alone): only nowcast is faster")
+    for ax in axes:
+        style_axes(ax)
+        ax.grid(axis="y", visible=False)
+    fig.suptitle(
+        "Tuned baseline (lr 4e-3, weight decay 2), 10 seeds per method",
+        x=0.125,
+        y=1.0,
+        ha="left",
+        fontsize=12,
+    )
+    save(fig, "tuned_results.png")
+
+
+def plot_nowcast_idea() -> None:
+    """Three fast-moving weights of MLP seed 0: a line through recent snapshots, extended ahead."""
+    ckpts = sorted(find_run(RUN).glob("step_*.pt"))
+    steps = np.array([int(c.stem.removeprefix("step_")) for c in ckpts])
+    keep = (steps >= 3_000) & (steps <= 12_000)
+    steps = steps[keep]
+    weights = np.stack(
+        [
+            load_model(c)[0].state_dict()["embed_a.weight"].double().numpy().ravel()
+            for c, k in zip(ckpts, keep)
+            if k
+        ]
+    )
+    now, horizon, k = 9_000, 1_000, 4  # line through 4 snapshots, 1,000 steps ahead
+    window = (steps > now - k * 500) & (steps <= now)
+    t = steps[window]
+    slope, icept = np.polyfit(t, weights[window], 1)
+    order = np.argsort(np.abs(slope))
+    # typical movers, not the extremes: the weights at the 90th, 95th and 98th percentile of |slope|
+    picks = [order[int(q * (len(order) - 1))] for q in (0.98, 0.95, 0.90)]
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    for i, color in zip(picks, COLOURS):
+        ax.plot(steps, weights[:, i], color=color, lw=1, alpha=0.45)
+        ax.plot(t, weights[window, i], "o", color=color, ms=6)
+        line_t = np.array([t[0], now + horizon])
+        ax.plot(line_t, slope[i] * line_t + icept[i], color=color, ls="--", lw=1.8)
+        ax.plot(
+            now + horizon,
+            slope[i] * (now + horizon) + icept[i],
+            "*",
+            color=color,
+            ms=15,
+            mec="white",
+        )
+    ax.axvline(now, color=MUTED, ls=":", lw=1)
+    xform = ax.get_xaxis_transform()  # x in data units, y in axes fraction
+    ax.text(now - 80, 0.97, "now", color=MUTED, ha="right", va="top", transform=xform)
+    ax.axvspan(now, now + horizon, color=GRID, alpha=0.5, lw=0)
+    ax.text(now + horizon / 2, 0.03, "jump", color=MUTED, ha="center", transform=xform)
+    handles = [
+        plt.Line2D([], [], color=MUTED, lw=1, alpha=0.6, label="what training did"),
+        plt.Line2D([], [], color=MUTED, marker="o", ls="", label="recent snapshots"),
+        plt.Line2D([], [], color=MUTED, ls="--", label="straight-line forecast"),
+        plt.Line2D([], [], color=MUTED, marker="*", ms=12, ls="", label="jump target"),
+    ]
+    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=4)
+    ax.set_xlabel("training step")
+    ax.set_ylabel("value of the weight")
+    ax.set_title(
+        "Nowcasting: draw a line through each weight's recent past, jump ahead along it\n"
+        "(3 weights of one plain run that are moving, but not the extremes; colour = one weight)"
+    )
+    style_axes(ax)
+    save(fig, "nowcast_idea.png")
+
+
 def main() -> None:
-    """Make every figure."""
-    plot_clock()
-    plot_table_split()
-    plot_story_curve()
-    plot_neuron_lens()
-    plot_poly_vs_wave()
-    plot_jump_idea()
-    plot_results_dots()
-    plot_snap_vs_mould()
+    """Make every figure, skipping (with a warning) those whose runs are missing."""
+    for make in (
+        plot_clock,
+        plot_table_split,
+        plot_story_curve,
+        plot_neuron_lens,
+        plot_poly_vs_wave,
+        plot_jump_idea,
+        plot_results_dots,
+        plot_snap_vs_mould,
+        plot_baseline_lesson,
+        plot_tuned_results,
+        plot_nowcast_idea,
+    ):
+        try:
+            make()
+        except FileNotFoundError as err:
+            plt.close("all")
+            print(f"warning: skipped {make.__name__}: {err}")
 
 
 if __name__ == "__main__":
