@@ -7,8 +7,9 @@ Call `accel.after_backward(step)` between `loss.backward()` and `opt.step()`, an
 import json
 import math
 import random
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict, cast
 
 import numpy as np
 import torch
@@ -224,9 +225,10 @@ def fourier_basis(u: Tensor, v: Tensor, m: int = 9) -> tuple[Tensor, list[int]]:
     Returns (basis with unit-RMS columns, base frequency per neuron).
     """
     n = u.shape[-1]
-    power = sum(
-        torch.fft.rfft(c - c.mean(-1, keepdim=True)).abs() ** 2 for c in (u, v)
-    )[:, 1 : n // 2 + 1]
+    u0, v0 = (c - c.mean(-1, keepdim=True) for c in (u, v))
+    power = (torch.fft.rfft(u0).abs() ** 2 + torch.fft.rfft(v0).abs() ** 2)[
+        :, 1 : n // 2 + 1
+    ]
     if n % 2 == 0:
         power[:, -1] /= 2  # the Nyquist frequency has no mirror image
     harmonics = harmonic_matrix(n, (m - 1) // 2, power.dtype)
@@ -368,7 +370,9 @@ def rebuild_optimizer(
     """
     # ponytail: one param group, which is all train.py builds; map groups if that changes
     assert len(old.param_groups) == 1, "only single-group optimizers are supported"
-    new = type(old)(model.parameters())
+    # Hyperparameters are copied from the old param group below, so the class needs only params.
+    make = cast(Callable[[Iterator[nn.Parameter]], torch.optim.Optimizer], type(old))
+    new = make(model.parameters())
     new.param_groups[0].update(
         {k: v for k, v in old.param_groups[0].items() if k != "params"}
     )
@@ -393,7 +397,7 @@ def effective_state_dict(model: nn.Module) -> dict[str, Tensor]:
     }
     for name, module in model.named_modules():
         if parametrize.is_parametrized(module):
-            for tensor_name in module.parametrizations:
+            for tensor_name in cast(nn.ModuleDict, module.parametrizations):
                 state[f"{name}.{tensor_name}"] = getattr(module, tensor_name).detach()
     return state
 
@@ -444,14 +448,14 @@ class SubstitutionHook(ProbeHook):
         if random_k and basis != "probe":
             raise ValueError("random_k only applies to basis='probe'")
         super().__init__(x_train, p, out_path, layer, every, n_harmonics, seed)
-        self.mode = mode
+        self.mode: SubstitutionMode = mode
         self.tau_share = tau_share
         self.tau_r2 = tau_r2
         self.y_train = y_train
         self.log_path = log_path
         self.random_k = random_k
         self.sub_all_at = sub_all_at
-        self.basis = basis
+        self.basis: BasisName = basis
         self.tau_energy = tau_energy
         self.seed = seed
         self.check_a, self.check_b = self.a[~self.fit_rows], self.b[~self.fit_rows]
@@ -499,7 +503,8 @@ class SubstitutionHook(ProbeHook):
             if not parametrize.is_parametrized(e, "weight"):
                 columns = HarmonicColumns(self.p, basis.shape[-1], device)
                 parametrize.register_parametrization(e, "weight", columns)
-            columns = e.parametrizations.weight[0]
+            plist = cast(nn.ModuleDict, e.parametrizations)["weight"]
+            columns = cast(HarmonicColumns, cast(nn.ModuleList, plist)[0])
             old = columns.coef
             with torch.no_grad():
                 columns.grow(idx, basis, e.weight)
