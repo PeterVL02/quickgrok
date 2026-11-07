@@ -6,6 +6,8 @@ Writes curves.png (loss and accuracy per arm), grok_steps.png (steps to 99% test
 seed) and summary.md (median and IQR table). If run directories contain probe.jsonl (written by
 `train --probe-every`), also trigger.png and lead_time.md: when neurons pass the substitution
 trigger (harmonic share >= tau_share and check-split R^2 >= tau_r2) relative to grokking.
+If they contain substitutions.jsonl (`train --substitute`), also substitutions.png. With two or
+more arms, stats.md tests every arm against the first (the baseline).
 """
 
 import argparse
@@ -18,8 +20,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.stats import mannwhitneyu
 
-from quickgrok.accel import ProbeRecord
+from quickgrok.accel import ProbeRecord, SubstitutionRecord
 from quickgrok.plot_pilot import (
     GRID,
     INK,
@@ -48,6 +51,7 @@ ARM_COLORS = [
 TAU_SHARES = [0.5, 0.7, 0.85]
 TAU_R2S = [0.8, 0.9]
 LEAD_FRAC = 0.1  # fraction of neurons that must pass for the trigger to count as fired
+N_BOOT = 10_000  # bootstrap resamples for the CI of the median difference
 
 
 class ArmSummary(TypedDict):
@@ -98,6 +102,50 @@ def write_summary(summaries: list[ArmSummary], out: Path) -> str:
     lines.append(
         "Cells: median [IQR] step over runs that reached the milestone (reached/total)."
     )
+    table = "\n".join(lines)
+    out.write_text(table + "\n", encoding="utf-8")
+    return table
+
+
+def bootstrap_median_diff(
+    base: list[int], arm: list[int], seed: int = 0
+) -> tuple[float, float]:
+    """95% percentile-bootstrap CI of median(base) - median(arm), resampling each group."""
+    rng = np.random.default_rng(seed)
+    b = rng.choice(base, (N_BOOT, len(base))).astype(float)
+    a = rng.choice(arm, (N_BOOT, len(arm))).astype(float)
+    diffs = np.median(b, axis=1) - np.median(a, axis=1)
+    low, high = np.quantile(diffs, [0.025, 0.975])
+    return float(low), float(high)
+
+
+def write_stats(summaries: list[ArmSummary], out: Path) -> str:
+    """Markdown table: each arm's steps to 99% test acc against the first arm; also to `out`.
+
+    Speed-up = (baseline median - arm median) / baseline median, with a bootstrap 95% CI of the
+    median difference on the same scale; p from a two-sided Mann-Whitney U test. Runs that never
+    reached 99% are left out of both (the table counts them).
+    """
+    base = [x for x in summaries[0]["grok99"] if x is not None]
+    lines = [
+        f"Steps to 99% test accuracy vs **{summaries[0]['arm']}** (median {np.median(base):,.0f}).",
+        "",
+        "| Arm | Grokked | Median | Speed-up | 95% CI | Mann–Whitney p |",
+        "|---|---|---|---|---|---|",
+    ]
+    for s in summaries[1:]:
+        arm = [x for x in s["grok99"] if x is not None]
+        if not arm:
+            lines.append(f"| {s['arm']} | 0/{s['n_runs']} | — | — | — | — |")
+            continue
+        scale = 100 / np.median(base)
+        low, high = bootstrap_median_diff(base, arm)
+        speedup = (np.median(base) - np.median(arm)) * scale
+        p = mannwhitneyu(base, arm, alternative="two-sided").pvalue
+        lines.append(
+            f"| {s['arm']} | {len(arm)}/{s['n_runs']} | {np.median(arm):,.0f} | "
+            f"{speedup:+.0f}% | [{low * scale:+.0f}%, {high * scale:+.0f}%] | {p:.2g} |"
+        )
     table = "\n".join(lines)
     out.write_text(table + "\n", encoding="utf-8")
     return table
@@ -316,7 +364,7 @@ def plot_trigger(
         x=0.01,
         ha="left",
     )
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.4 / fig.get_figheight()))  # room for suptitle
     fig.savefig(out, dpi=150)
     plt.close(fig)
 
@@ -368,6 +416,62 @@ def write_lead_times(
     return table
 
 
+def count_substituted(run_dir: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Probe steps of a run and the number of neurons substituted so far at each of them."""
+    steps = np.array([r["step"] for r in load_probe(run_dir)])
+    lines = (run_dir / "substitutions.jsonl").read_text().splitlines()
+    events: list[SubstitutionRecord] = [json.loads(line) for line in lines]
+    counts = np.zeros(len(steps))
+    for e in events:
+        counts[steps >= e["step"]] = e["n_substituted_total"]
+    return steps, counts
+
+
+def plot_substitutions(
+    arms: list[str],
+    colors: list[str],
+    run_dirs: list[list[Path]],
+    groks: list[list[int | None]],
+    out: Path,
+) -> None:
+    """Substituted neurons over training per arm: thin per seed, bold median, dashed median grok."""
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    for i, (arm, color, dirs, arm_groks) in enumerate(
+        zip(arms, colors, run_dirs, groks)
+    ):
+        runs = [count_substituted(d) for d in dirs]
+        longest = max((steps for steps, _ in runs), key=len)
+        counts = np.full((len(runs), len(longest)), np.nan)  # nan after a run ended
+        for j, (steps, count) in enumerate(runs):
+            counts[j, : len(count)] = count
+            ax.plot(steps, count, color=color, lw=0.6, alpha=0.3)
+        ax.plot(
+            longest,
+            np.nanmedian(counts, axis=0),
+            color=color,
+            lw=2,
+            label=arm,
+            ls=["-", "-."][i % 2],
+        )  # -. keeps overlaps visible
+        done = [g for g in arm_groks if g is not None]
+        if done:
+            ax.axvline(float(np.median(done)), color=color, ls="--", lw=1.2)
+    ax.set_xlabel("training step", color=MUTED, fontsize=9)
+    ax.set_ylabel("neurons substituted (of 512)", color=MUTED, fontsize=9)
+    style_axes(ax)
+    ax.legend(frameon=False, fontsize=8, loc="upper right")
+    ax.set_title(
+        "Substituted neurons over training (thin: seeds, bold: median, "
+        "dashed: median step to 99% test acc)",
+        fontsize=10,
+        color=INK,
+        loc="left",
+    )
+    fig.tight_layout()
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+
+
 def main() -> None:
     """Parse arms, make the comparison figures and print the summary table."""
     parser = argparse.ArgumentParser(
@@ -391,6 +495,19 @@ def main() -> None:
     plot_curves(arms, histories, args.out / "curves.png")
     plot_grok_steps(summaries, args.out / "grok_steps.png")
     print(write_summary(summaries, args.out / "summary.md"))
+    if len(summaries) > 1:
+        print(write_stats(summaries, args.out / "stats.md"))
+
+    subbed = [
+        (arm, ARM_COLORS[i % len(ARM_COLORS)], [Path(d) for d in a[1:]], s["grok99"])
+        for i, (arm, a, s) in enumerate(zip(arms, args.arm, summaries))
+        if all((Path(d) / "substitutions.jsonl").exists() for d in a[1:])
+    ]
+    if subbed:
+        s_arms, s_colors, s_dirs, s_groks = map(list, zip(*subbed))
+        plot_substitutions(
+            s_arms, s_colors, s_dirs, s_groks, args.out / "substitutions.png"
+        )
 
     probed = [
         (
