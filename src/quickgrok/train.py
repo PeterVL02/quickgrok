@@ -36,6 +36,7 @@ from quickgrok.models import (  # noqa: F401  (re-exported for `from quickgrok.t
     get_activation_layers,
     load_model,
 )
+from quickgrok.nowcast import ForecasterName, GrokfastHook, NowcastHook
 
 GROK_ACC = 0.99  # test accuracy that counts as grokked
 
@@ -86,6 +87,13 @@ def train(
     tau_r2: float = 0.8,
     random_k: bool = False,
     sub_all_at: int | None = None,
+    nowcast: Literal["none"] | ForecasterName = "none",
+    nowcast_horizon: int = 1000,
+    nowcast_every: int = 1000,
+    nowcast_k: int = 8,
+    nowcast_max_loss_ratio: float = 1.5,
+    grokfast_lambda: float = 0.0,
+    grokfast_alpha: float = 0.98,
 ) -> None:
     """Full-batch AdamW training.
 
@@ -94,7 +102,8 @@ def train(
     `probe_every > 0` adds a `ProbeHook` writing `out_dir/probe.jsonl`; with `substitute` other
     than "none" it is a `SubstitutionHook` (thresholds `tau_share`, `tau_r2`) that also writes
     `out_dir/substitutions.jsonl` (see `SubstitutionHook` for `random_k` and `sub_all_at`).
-    Checkpoints and `weight_norm` use the effective weights. With `stop_after_grok`, training
+    `nowcast` other than "none" adds a `NowcastHook` writing `out_dir/nowcast.jsonl`;
+    `grokfast_lambda > 0` adds a `GrokfastHook`. Checkpoints and `weight_norm` use the effective weights. With `stop_after_grok`, training
     ends that many steps after test accuracy first reaches GROK_ACC.
     """
     assert save_every % eval_every == 0, "save_every must be a multiple of eval_every"
@@ -135,6 +144,22 @@ def train(
         )
     elif probe_every:
         hooks.append(ProbeHook(*probe_args))
+    if grokfast_lambda:
+        hooks.append(GrokfastHook(grokfast_alpha, grokfast_lambda))
+    if nowcast != "none":
+        hooks.append(
+            NowcastHook(
+                nowcast,
+                x_train,
+                y_train,
+                out_dir / "nowcast.jsonl",
+                horizon=nowcast_horizon,
+                jump_every=nowcast_every,
+                k=nowcast_k,
+                max_loss_ratio=nowcast_max_loss_ratio,
+                seed=seed,
+            )
+        )
     accel = Accelerator(model, hooks)
     history: list[Metrics] = []
     end = steps
@@ -229,6 +254,19 @@ def main() -> None:
         default=None,
         help="substitute every live neuron at this probe step, ignoring the thresholds",
     )
+    parser.add_argument(
+        "--nowcast", choices=["none", *get_args(ForecasterName)], default="none"
+    )
+    parser.add_argument("--nowcast-horizon", type=int, default=1000)
+    parser.add_argument(
+        "--nowcast-every", type=int, default=1000, help="steps between jumps"
+    )
+    parser.add_argument(
+        "--nowcast-k", type=int, default=8, help="snapshots per forecast"
+    )
+    parser.add_argument("--nowcast-max-loss-ratio", type=float, default=1.5)
+    parser.add_argument("--grokfast-lambda", type=float, default=0.0, help="0 = off")
+    parser.add_argument("--grokfast-alpha", type=float, default=0.98)
     args = parser.parse_args()
     if args.substitute != "none" and args.probe_every <= 0:
         parser.error("--substitute needs --probe-every > 0")
@@ -257,6 +295,13 @@ def main() -> None:
         args.tau_r2,
         args.random_k,
         args.sub_all_at,
+        args.nowcast,
+        args.nowcast_horizon,
+        args.nowcast_every,
+        args.nowcast_k,
+        args.nowcast_max_loss_ratio,
+        args.grokfast_lambda,
+        args.grokfast_alpha,
     )
 
 
