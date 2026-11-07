@@ -19,7 +19,7 @@ from typing import Literal, TypedDict, get_args
 import torch
 from torch import Tensor
 
-from quickgrok.train import GrokTransformer, load_model
+from quickgrok.models import GrokModel, get_activation_layers, load_model
 
 Basis = Literal["poly", "trig"]
 
@@ -31,9 +31,8 @@ class NeuronFit(TypedDict):
     coef: list[float]  # one per column of the design matrix
     top_freq: int | None  # trig only: frequency k explaining the most variance
     top_freq_share: float | None  # trig only: share of explained variance from top_freq
-    freq_shares: list[
-        float
-    ]  # trig only: share per frequency k = 1..(p-1)/2; else empty
+    # trig only: share per frequency k = 1..(p-1)/2; else empty
+    freq_shares: list[float]
 
 
 def make_grid(p: int) -> tuple[Tensor, Tensor]:
@@ -42,19 +41,64 @@ def make_grid(p: int) -> tuple[Tensor, Tensor]:
     return a, b
 
 
-def record_neurons(model: GrokTransformer, neurons: list[int]) -> Tensor:
-    """Return post-ReLU MLP activations at the "=" position, shape (p*p, len(neurons))."""
+def record_activations(
+    model: GrokModel, x: Tensor, layer: int = 0, neurons: list[int] | None = None
+) -> Tensor:
+    """Return activations of hidden layer `layer` on token inputs `x` (N, 3), shape (N, n_neurons).
+
+    `neurons=None` means every neuron in the layer. For the transformer, the only layer is the
+    MLP after attention, read at the "=" position. Output keeps the model's device and dtype.
+    """
+    acts: list[Tensor] = []
+
+    def keep(_m: torch.nn.Module, _i: tuple[Tensor, ...], out: Tensor) -> None:
+        out = out[:, -1] if out.dim() == 3 else out  # transformer: (N, seq, d)
+        acts.append(out if neurons is None else out[:, neurons])
+
+    handle = get_activation_layers(model)[layer].register_forward_hook(keep)
+    try:
+        with torch.no_grad():
+            model(x)
+    finally:
+        handle.remove()
+    return acts[0]
+
+
+def record_neurons(
+    model: GrokModel, neurons: list[int] | None = None, layer: int = 0
+) -> Tensor:
+    """Return float64 activations of hidden layer `layer` on all p*p inputs, shape (p*p, n_neurons)."""
     p = model.unembed.out_features
     a, b = make_grid(p)
     x = torch.stack([a, b, torch.full_like(a, p)], dim=1)
-    acts: list[Tensor] = []
-    handle = model.mlp[1].register_forward_hook(
-        lambda _m, _i, out: acts.append(out[:, -1, neurons])
-    )
-    with torch.no_grad():
-        model(x)
-    handle.remove()
-    return acts[0].double()
+    return record_activations(model, x, layer, neurons).double()
+
+
+def fold_freq(j: int, p: int) -> int:
+    """Fold an integer frequency onto 0..(p-1)/2, since cos/sin at j and p - j are the same wave."""
+    j %= p
+    return min(j, p - j)
+
+
+def harmonic_share(
+    freq_shares: Tensor, p: int, n_harmonics: int = 4
+) -> tuple[Tensor, Tensor]:
+    """Base frequency k* (the top single frequency) and the share summed over its harmonics.
+
+    `freq_shares` (..., (p-1)/2) holds the share per frequency k = 1..(p-1)/2 (a fit's
+    `freq_shares`, or several stacked). The harmonics m*k*, m = 1..n_harmonics, are folded with
+    `fold_freq` and each counted once. Returns (k*, share), each of shape (...).
+    ReLU MLP neurons are square waves in k*x mod p, so their variance spreads over harmonics.
+    """
+    n_k = freq_shares.shape[-1]
+    harmonics = torch.zeros(n_k, n_k, dtype=freq_shares.dtype)  # [base - 1, freq - 1]
+    for k in range(1, n_k + 1):
+        for m in range(1, n_harmonics + 1):
+            j = fold_freq(m * k, p)
+            if j:
+                harmonics[k - 1, j - 1] = 1
+    base = freq_shares.argmax(-1)
+    return base + 1, (freq_shares * harmonics[base]).sum(-1)
 
 
 def build_features(
@@ -94,18 +138,24 @@ def fit_neurons(
     degree: int,
     neurons: list[int],
     fit_mask: Tensor | None = None,
+    features: tuple[Tensor, list[int]] | None = None,
+    pinv: Tensor | None = None,
 ) -> list[NeuronFit]:
     """Least-squares fit each column of `acts` (p*p, n) on the chosen basis and score it with R^2.
 
     With `fit_mask` (bool, p*p), only those rows are used for fitting; `r2` is then in-sample on
     them and `r2_heldout` is measured on the other rows. Without it, `r2_heldout` is nan.
+    For repeated fits on the same rows, pass `features` (a precomputed `build_features(a, b, p,
+    basis, degree)`) and `pinv` (`torch.linalg.pinv` of its fit rows) to skip the solve.
     """
-    X, freqs = build_features(a, b, p, basis, degree)
+    X, freqs = features or build_features(a, b, p, basis, degree)
     mask = torch.ones(len(a), dtype=torch.bool) if fit_mask is None else fit_mask
     X_fit, y_fit = X[mask], acts[mask]
-    coef = torch.linalg.lstsq(
-        X_fit, y_fit, driver="gelsd"
-    ).solution  # (features, neurons)
+    coef = (  # (features, neurons)
+        pinv @ y_fit
+        if pinv is not None
+        else torch.linalg.lstsq(X_fit, y_fit, driver="gelsd").solution
+    )
     r2 = score_r2(y_fit, X_fit @ coef)
     r2_heldout = (
         score_r2(acts[~mask], X[~mask] @ coef)
@@ -147,13 +197,14 @@ def main() -> None:
     parser.add_argument("--neurons", type=int, nargs="+", required=True)
     parser.add_argument("--basis", choices=get_args(Basis), default="trig")
     parser.add_argument("--degree", type=int, default=6, help="poly basis only")
+    parser.add_argument("--layer", type=int, default=0, help="hidden layer index")
     args = parser.parse_args()
 
     for path in args.checkpoints:
         model, ckpt = load_model(path)
         p = ckpt["p"]
         a, b = make_grid(p)
-        acts = record_neurons(model, args.neurons)
+        acts = record_neurons(model, args.neurons, args.layer)
         fits = fit_neurons(acts, a, b, p, args.basis, args.degree, args.neurons)
         print(
             f"\n{path}  step {ckpt['step']}  train_acc {ckpt['train_acc']:.3f}  val_acc {ckpt['val_acc']:.3f}"
