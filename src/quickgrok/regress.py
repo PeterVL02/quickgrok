@@ -3,8 +3,8 @@
 Each neuron is evaluated at the "=" position on all p*p inputs and fit by least squares in one of
 two bases:
   poly  monomials x^i y^j (i + j <= degree), with x, y = a, b rescaled to [-1, 1]
-  trig  for every frequency k: cos/sin(w a), cos/sin(w b) and their 4 pairwise products,
-        w = 2*pi*k/p. This is a degree-2 polynomial in Fourier features; it contains
+  trig  for every frequency k = 1..p//2: cos/sin(w a), cos/sin(w b) and their 4 pairwise
+        products, w = 2*pi*k/p (for even p the sin columns at k = p/2 are zero). This is a degree-2 polynomial in Fourier features; it contains
         cos(w(a+b)) = cos(wa)cos(wb) - sin(wa)sin(wb), which grokked add/sub nets are known to use.
 On the full grid every trig column is orthogonal, so the explained variance splits exactly per k.
 
@@ -31,7 +31,7 @@ class NeuronFit(TypedDict):
     coef: list[float]  # one per column of the design matrix
     top_freq: int | None  # trig only: frequency k explaining the most variance
     top_freq_share: float | None  # trig only: share of explained variance from top_freq
-    # trig only: share per frequency k = 1..(p-1)/2; else empty
+    # trig only: share per frequency k = 1..p//2; else empty
     freq_shares: list[float]
 
 
@@ -75,9 +75,21 @@ def record_neurons(
 
 
 def fold_freq(j: int, p: int) -> int:
-    """Fold an integer frequency onto 0..(p-1)/2, since cos/sin at j and p - j are the same wave."""
+    """Fold an integer frequency onto 0..p//2, since cos/sin at j and p - j are the same wave."""
     j %= p
     return min(j, p - j)
+
+
+def harmonic_matrix(p: int, n_harmonics: int, dtype: torch.dtype) -> Tensor:
+    """0/1 matrix (p//2, p//2): entry [k - 1, j - 1] is 1 if j = fold(m*k), m = 1..n_harmonics."""
+    n_k = p // 2
+    harmonics = torch.zeros(n_k, n_k, dtype=dtype)  # [base - 1, freq - 1]
+    for k in range(1, n_k + 1):
+        for m in range(1, n_harmonics + 1):
+            j = fold_freq(m * k, p)
+            if j:
+                harmonics[k - 1, j - 1] = 1
+    return harmonics
 
 
 def harmonic_share(
@@ -85,18 +97,12 @@ def harmonic_share(
 ) -> tuple[Tensor, Tensor]:
     """Base frequency k* (the top single frequency) and the share summed over its harmonics.
 
-    `freq_shares` (..., (p-1)/2) holds the share per frequency k = 1..(p-1)/2 (a fit's
+    `freq_shares` (..., p//2) holds the share per frequency k = 1..p//2 (a fit's
     `freq_shares`, or several stacked). The harmonics m*k*, m = 1..n_harmonics, are folded with
     `fold_freq` and each counted once. Returns (k*, share), each of shape (...).
     ReLU MLP neurons are square waves in k*x mod p, so their variance spreads over harmonics.
     """
-    n_k = freq_shares.shape[-1]
-    harmonics = torch.zeros(n_k, n_k, dtype=freq_shares.dtype)  # [base - 1, freq - 1]
-    for k in range(1, n_k + 1):
-        for m in range(1, n_harmonics + 1):
-            j = fold_freq(m * k, p)
-            if j:
-                harmonics[k - 1, j - 1] = 1
+    harmonics = harmonic_matrix(p, n_harmonics, freq_shares.dtype)
     base = freq_shares.argmax(-1)
     return base + 1, (freq_shares * harmonics[base]).sum(-1)
 
@@ -113,7 +119,7 @@ def build_features(
         cols = [x**i * y ** (d - i) for d in range(degree + 1) for i in range(d + 1)]
         return torch.stack(cols, dim=1), [0] * len(cols)
     cols, freqs = [torch.ones(len(a), dtype=torch.float64)], [0]
-    for k in range(1, (p - 1) // 2 + 1):
+    for k in range(1, p // 2 + 1):
         w = 2 * math.pi * k / p
         ca, sa = torch.cos(w * a.double()), torch.sin(w * a.double())
         cb, sb = torch.cos(w * b.double()), torch.sin(w * b.double())

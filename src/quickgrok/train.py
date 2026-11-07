@@ -19,13 +19,14 @@ from torch import Tensor, nn
 
 from quickgrok.accel import (
     Accelerator,
+    BasisName,
     Hook,
     ProbeHook,
     SubstitutionHook,
     SubstitutionMode,
     effective_state_dict,
 )
-from quickgrok.data import Example, Operation, make_dataset
+from quickgrok.data import S5_ORDER, Example, Operation, make_dataset
 from quickgrok.models import (  # noqa: F401  (re-exported for `from quickgrok.train import ...`)
     Checkpoint,
     GrokMLP,
@@ -87,6 +88,8 @@ def train(
     tau_r2: float = 0.8,
     random_k: bool = False,
     sub_all_at: int | None = None,
+    basis: BasisName = "probe",
+    tau_energy: float = 0.8,
     nowcast: Literal["none"] | ForecasterName = "none",
     nowcast_horizon: int = 1000,
     nowcast_every: int = 1000,
@@ -102,12 +105,18 @@ def train(
     `save_every` steps (a multiple of `eval_every`) a checkpoint is saved and progress printed.
     `probe_every > 0` adds a `ProbeHook` writing `out_dir/probe.jsonl`; with `substitute` other
     than "none" it is a `SubstitutionHook` (thresholds `tau_share`, `tau_r2`) that also writes
+    `out_dir/substitutions.jsonl` (see `SubstitutionHook` for `random_k`, `sub_all_at`, `basis`
+    and `tau_energy`).
+    Checkpoints and `weight_norm` use the effective weights. With `stop_after_grok`, training
+    ends that many steps after test accuracy first reaches GROK_ACC. For op "s5", `p` is
+    replaced by the number of symbols, `S5_ORDER`.
     `out_dir/substitutions.jsonl` (see `SubstitutionHook` for `random_k` and `sub_all_at`).
     `nowcast` other than "none" adds a `NowcastHook` writing `out_dir/nowcast.jsonl`;
     `grokfast_lambda > 0` adds a `GrokfastHook`. Checkpoints and `weight_norm` use the effective weights. With `stop_after_grok`, training
     ends that many steps after test accuracy first reaches GROK_ACC.
     """
     assert save_every % eval_every == 0, "save_every must be a multiple of eval_every"
+    p = S5_ORDER if op == "s5" else p
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(seed)
     train_set, val_set = make_dataset(p, op, train_frac, seed)
@@ -141,6 +150,8 @@ def train(
                 log_path=out_dir / "substitutions.jsonl",
                 random_k=random_k,
                 sub_all_at=sub_all_at,
+                basis=basis,
+                tau_energy=tau_energy,
             )
         )
     elif probe_every:
@@ -218,7 +229,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", choices=get_args(ModelName), default="transformer")
     parser.add_argument("--n-hidden", type=int, default=1, help="MLP hidden layers")
-    parser.add_argument("--p", type=int, default=97)
+    parser.add_argument("--p", type=int, default=97, help="ignored for --op s5")
     parser.add_argument("--op", choices=get_args(Operation), default="add")
     parser.add_argument("--train-frac", type=float, default=0.3)
     parser.add_argument("--steps", type=int, default=30000)
@@ -243,8 +254,23 @@ def main() -> None:
         default="none",
         help="substitute neurons that pass the probe trigger (needs --probe-every)",
     )
-    parser.add_argument("--tau-share", type=float, default=0.7)
+    parser.add_argument(
+        "--basis",
+        choices=get_args(BasisName),
+        default="probe",
+        help="substitution basis: probe = harmonics of the activation fit's k* (T6); "
+        "the others are chosen from the weights",
+    )
+    parser.add_argument(
+        "--tau-share", type=float, default=0.7, help="--basis probe only"
+    )
     parser.add_argument("--tau-r2", type=float, default=0.8)
+    parser.add_argument(
+        "--tau-energy",
+        type=float,
+        default=0.8,
+        help="captured-energy threshold, every --basis except probe",
+    )
     parser.add_argument(
         "--random-k",
         action="store_true",
@@ -279,6 +305,8 @@ def main() -> None:
         parser.error("--substitute needs --probe-every > 0")
     if args.substitute == "none" and (args.random_k or args.sub_all_at is not None):
         parser.error("--random-k and --sub-all-at need --substitute")
+    if args.random_k and args.basis != "probe":
+        parser.error("--random-k only applies to --basis probe")
     out_dir = args.out_dir or Path("runs") / f"{args.model}_p{args.p}_{args.op}"
     train(
         args.model,
@@ -302,6 +330,8 @@ def main() -> None:
         args.tau_r2,
         args.random_k,
         args.sub_all_at,
+        args.basis,
+        args.tau_energy,
         args.nowcast,
         args.nowcast_horizon,
         args.nowcast_every,
