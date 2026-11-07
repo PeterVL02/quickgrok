@@ -41,17 +41,14 @@ def make_grid(p: int) -> tuple[Tensor, Tensor]:
     return a, b
 
 
-def record_neurons(
-    model: GrokModel, neurons: list[int] | None = None, layer: int = 0
+def record_activations(
+    model: GrokModel, x: Tensor, layer: int = 0, neurons: list[int] | None = None
 ) -> Tensor:
-    """Return activations of hidden layer `layer` on all p*p inputs, shape (p*p, n_neurons).
+    """Return activations of hidden layer `layer` on token inputs `x` (N, 3), shape (N, n_neurons).
 
     `neurons=None` means every neuron in the layer. For the transformer, the only layer is the
-    MLP after attention, read at the "=" position.
+    MLP after attention, read at the "=" position. Output keeps the model's device and dtype.
     """
-    p = model.unembed.out_features
-    a, b = make_grid(p)
-    x = torch.stack([a, b, torch.full_like(a, p)], dim=1)
     acts: list[Tensor] = []
 
     def keep(_m: torch.nn.Module, _i: tuple[Tensor, ...], out: Tensor) -> None:
@@ -59,10 +56,49 @@ def record_neurons(
         acts.append(out if neurons is None else out[:, neurons])
 
     handle = get_activation_layers(model)[layer].register_forward_hook(keep)
-    with torch.no_grad():
-        model(x)
-    handle.remove()
-    return acts[0].double()
+    try:
+        with torch.no_grad():
+            model(x)
+    finally:
+        handle.remove()
+    return acts[0]
+
+
+def record_neurons(
+    model: GrokModel, neurons: list[int] | None = None, layer: int = 0
+) -> Tensor:
+    """Return float64 activations of hidden layer `layer` on all p*p inputs, shape (p*p, n_neurons)."""
+    p = model.unembed.out_features
+    a, b = make_grid(p)
+    x = torch.stack([a, b, torch.full_like(a, p)], dim=1)
+    return record_activations(model, x, layer, neurons).double()
+
+
+def fold_freq(j: int, p: int) -> int:
+    """Fold an integer frequency onto 0..(p-1)/2, since cos/sin at j and p - j are the same wave."""
+    j %= p
+    return min(j, p - j)
+
+
+def harmonic_share(
+    freq_shares: Tensor, p: int, n_harmonics: int = 4
+) -> tuple[Tensor, Tensor]:
+    """Base frequency k* (the top single frequency) and the share summed over its harmonics.
+
+    `freq_shares` (..., (p-1)/2) holds the share per frequency k = 1..(p-1)/2 (a fit's
+    `freq_shares`, or several stacked). The harmonics m*k*, m = 1..n_harmonics, are folded with
+    `fold_freq` and each counted once. Returns (k*, share), each of shape (...).
+    ReLU MLP neurons are square waves in k*x mod p, so their variance spreads over harmonics.
+    """
+    n_k = freq_shares.shape[-1]
+    harmonics = torch.zeros(n_k, n_k, dtype=freq_shares.dtype)  # [base - 1, freq - 1]
+    for k in range(1, n_k + 1):
+        for m in range(1, n_harmonics + 1):
+            j = fold_freq(m * k, p)
+            if j:
+                harmonics[k - 1, j - 1] = 1
+    base = freq_shares.argmax(-1)
+    return base + 1, (freq_shares * harmonics[base]).sum(-1)
 
 
 def build_features(
@@ -102,18 +138,24 @@ def fit_neurons(
     degree: int,
     neurons: list[int],
     fit_mask: Tensor | None = None,
+    features: tuple[Tensor, list[int]] | None = None,
+    pinv: Tensor | None = None,
 ) -> list[NeuronFit]:
     """Least-squares fit each column of `acts` (p*p, n) on the chosen basis and score it with R^2.
 
     With `fit_mask` (bool, p*p), only those rows are used for fitting; `r2` is then in-sample on
     them and `r2_heldout` is measured on the other rows. Without it, `r2_heldout` is nan.
+    For repeated fits on the same rows, pass `features` (a precomputed `build_features(a, b, p,
+    basis, degree)`) and `pinv` (`torch.linalg.pinv` of its fit rows) to skip the solve.
     """
-    X, freqs = build_features(a, b, p, basis, degree)
+    X, freqs = features or build_features(a, b, p, basis, degree)
     mask = torch.ones(len(a), dtype=torch.bool) if fit_mask is None else fit_mask
     X_fit, y_fit = X[mask], acts[mask]
-    coef = torch.linalg.lstsq(
-        X_fit, y_fit, driver="gelsd"
-    ).solution  # (features, neurons)
+    coef = (  # (features, neurons)
+        pinv @ y_fit
+        if pinv is not None
+        else torch.linalg.lstsq(X_fit, y_fit, driver="gelsd").solution
+    )
     r2 = score_r2(y_fit, X_fit @ coef)
     r2_heldout = (
         score_r2(acts[~mask], X[~mask] @ coef)

@@ -3,10 +3,13 @@
 Run: uv run python -m quickgrok.plot_compare --arm vanilla runs/mlp_baseline/seed* \
          --out reports/figures/mlp_baseline
 Writes curves.png (loss and accuracy per arm), grok_steps.png (steps to 99% test accuracy per
-seed) and summary.md (median and IQR table).
+seed) and summary.md (median and IQR table). If run directories contain probe.jsonl (written by
+`train --probe-every`), also trigger.png and lead_time.md: when neurons pass the substitution
+trigger (harmonic share >= tau_share and check-split R^2 >= tau_r2) relative to grokking.
 """
 
 import argparse
+import json
 from pathlib import Path
 from typing import TypedDict
 
@@ -16,6 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from quickgrok.accel import ProbeRecord
 from quickgrok.plot_pilot import (
     GRID,
     INK,
@@ -39,6 +43,11 @@ ARM_COLORS = [
     "#6250d6",
     "#e34948",
 ]
+
+
+TAU_SHARES = [0.5, 0.7, 0.85]
+TAU_R2S = [0.8, 0.9]
+LEAD_FRAC = 0.1  # fraction of neurons that must pass for the trigger to count as fired
 
 
 class ArmSummary(TypedDict):
@@ -97,10 +106,19 @@ def write_summary(summaries: list[ArmSummary], out: Path) -> str:
 def stack_metric(
     histories: list[list[Metrics]], key: str
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Steps (T,) and values (runs, T), truncated to the shortest run; step 0 dropped for log x."""
-    n = min(len(h) for h in histories)
-    steps = np.array([m["step"] for m in histories[0][:n]])
-    values = np.array([[m[key] for m in h[:n]] for h in histories])  # type: ignore[literal-required]
+    """Steps (T,) over all runs and values (runs, T); step 0 dropped for log x.
+
+    A run that ended early keeps its last logged value (forward fill) up to the longest run.
+    """
+    steps = np.array(sorted({m["step"] for h in histories for m in h}))
+    values = np.array(
+        [
+            np.array([m[key] for m in h])[  # type: ignore[literal-required]
+                np.searchsorted([m["step"] for m in h], steps, side="right") - 1
+            ]
+            for h in histories
+        ]
+    )
     keep = steps > 0
     return steps[keep], values[:, keep]
 
@@ -208,6 +226,148 @@ def plot_grok_steps(summaries: list[ArmSummary], out: Path) -> None:
     plt.close(fig)
 
 
+def load_probe(run_dir: Path) -> list[ProbeRecord]:
+    """Read the probe log written by `ProbeHook`."""
+    lines = (run_dir / "probe.jsonl").read_text().splitlines()
+    return [json.loads(line) for line in lines]
+
+
+def trigger_fraction(
+    records: list[ProbeRecord], tau_share: float, tau_r2: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Probe steps and the fraction of neurons with harmonic share and check R^2 above both taus."""
+    steps = np.array([r["step"] for r in records])
+    frac = np.array(
+        [
+            np.mean(
+                [
+                    s is not None and q is not None and s >= tau_share and q >= tau_r2
+                    for s, q in zip(r["harmonic_share"], r["r2_check"])
+                ]
+            )
+            for r in records
+        ]
+    )
+    return steps, frac
+
+
+def first_pass(
+    records: list[ProbeRecord], tau_share: float, tau_r2: float
+) -> int | None:
+    """First probe step where at least LEAD_FRAC of neurons pass the trigger, or None."""
+    steps, frac = trigger_fraction(records, tau_share, tau_r2)
+    return next((int(s) for s, f in zip(steps, frac) if f >= LEAD_FRAC), None)
+
+
+def plot_trigger(
+    arms: list[str],
+    probes: list[list[list[ProbeRecord]]],
+    groks: list[list[int | None]],
+    out: Path,
+) -> None:
+    """Rows: arms with probes. Columns: tau_r2. One line per tau_share (median, thin per run)."""
+    fig, axes = plt.subplots(
+        len(arms),
+        len(TAU_R2S),
+        figsize=(5 * len(TAU_R2S), 3.6 * len(arms)),
+        sharex=True,
+        squeeze=False,
+    )
+    for row, (arm, runs, arm_groks) in enumerate(zip(arms, probes, groks)):
+        longest = [r["step"] for r in max(runs, key=len)]
+        for col, tau_r2 in enumerate(TAU_R2S):
+            ax = axes[row, col]
+            for i, tau_share in enumerate(TAU_SHARES):
+                color = ARM_COLORS[i]
+                fracs = np.full(
+                    (len(runs), len(longest)), np.nan
+                )  # nan after a run ended
+                for j, records in enumerate(runs):
+                    steps, frac = trigger_fraction(records, tau_share, tau_r2)
+                    fracs[j, : len(frac)] = frac
+                    ax.plot(steps, frac, color=color, lw=0.8, alpha=0.35)
+                ax.plot(
+                    longest,
+                    np.nanmedian(fracs, axis=0),
+                    color=color,
+                    lw=2,
+                    ls=["-", "--", ":"][i],  # dashes keep coinciding lines visible
+                    label=f"harmonic share ≥ {tau_share}",
+                )
+            done = [g for g in arm_groks if g is not None]
+            if done:
+                ax.axvline(float(np.median(done)), color=MUTED, ls="--", lw=1)
+            ax.axhline(LEAD_FRAC, color=MUTED, lw=0.8, ls=":")
+            ax.set_ylim(-0.02, 1.02)
+            ax.set_title(
+                f"{arm}: check R² ≥ {tau_r2}", fontsize=10, color=INK, loc="left"
+            )
+            style_axes(ax)
+            if col == 0:
+                ax.set_ylabel("fraction of neurons passing", color=MUTED, fontsize=9)
+            if row == len(arms) - 1:
+                ax.set_xlabel("training step", color=MUTED, fontsize=9)
+    axes[0, 0].legend(frameon=False, fontsize=8, loc="upper left")
+    fig.suptitle(
+        "Substitution trigger over training (thin: seeds, bold: median, dashed: median "
+        f"grok step, dotted: {LEAD_FRAC:.0%})",
+        fontsize=11,
+        color=INK,
+        x=0.01,
+        ha="left",
+    )
+    fig.tight_layout()
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+
+
+def write_lead_times(
+    arms: list[str],
+    probes: list[list[list[ProbeRecord]]],
+    groks: list[list[int | None]],
+    names: list[list[str]],
+    out: Path,
+) -> str:
+    """Markdown table per arm: first probe step with >= LEAD_FRAC passing, and step / grok step."""
+    lines = []
+    for arm, runs, arm_groks, arm_names in zip(arms, probes, groks, names):
+        lines += [
+            (
+                f"**{arm}**: first probe step with ≥ {LEAD_FRAC:.0%} of neurons passing "
+                "(in brackets: that step / the run's grok step)"
+            ),
+            "",
+            "| τ_share | τ_r2 | "
+            + " | ".join(arm_names)
+            + " | median ratio | ratio < 0.8 |",
+            "|---" * (len(arm_names) + 4) + "|",
+        ]
+        for tau_share in TAU_SHARES:
+            for tau_r2 in TAU_R2S:
+                cells, ratios = [], []
+                for records, grok in zip(runs, arm_groks):
+                    first = first_pass(records, tau_share, tau_r2)
+                    ratio = first / grok if first is not None and grok else None
+                    ratios.append(ratio)
+                    cells.append(
+                        "—"
+                        if first is None
+                        else f"{first:,}" + ("" if ratio is None else f" ({ratio:.2f})")
+                    )
+                done = [r for r in ratios if r is not None]
+                med = f"{np.median(done):.2f}" if done else "—"
+                early = sum(r < 0.8 for r in done)
+                lines.append(
+                    f"| {tau_share} | {tau_r2} | "
+                    + " | ".join(cells)
+                    + f" | {med} | {early}/{len(runs)} |"
+                )
+        lines.append("")
+    table = "\n".join(lines)
+    out.write_text(table, encoding="utf-8")
+    return table
+
+
 def main() -> None:
     """Parse arms, make the comparison figures and print the summary table."""
     parser = argparse.ArgumentParser(
@@ -231,6 +391,25 @@ def main() -> None:
     plot_curves(arms, histories, args.out / "curves.png")
     plot_grok_steps(summaries, args.out / "grok_steps.png")
     print(write_summary(summaries, args.out / "summary.md"))
+
+    probed = [
+        (
+            arm,
+            [load_probe(Path(d)) for d in a[1:]],
+            s["grok99"],
+            [Path(d).name for d in a[1:]],
+        )
+        for arm, a, s in zip(arms, args.arm, summaries)
+        if all((Path(d) / "probe.jsonl").exists() for d in a[1:])
+    ]
+    if probed:
+        p_arms, p_runs, p_groks, p_names = map(list, zip(*probed))
+        plot_trigger(p_arms, p_runs, p_groks, args.out / "trigger.png")
+        print(
+            write_lead_times(
+                p_arms, p_runs, p_groks, p_names, args.out / "lead_time.md"
+            )
+        )
 
 
 if __name__ == "__main__":

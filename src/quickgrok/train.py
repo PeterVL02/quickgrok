@@ -5,8 +5,13 @@ Run: uv run python -m quickgrok.train --model mlp --op add --steps 30000
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict, get_args
+
+# Idle OpenMP threads sleep instead of spinning. Spinning after the probe's CPU fits slowed the
+# GPU training loop by ~10%. Only takes effect if torch is not imported yet.
+os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
 
 import torch
 import torch.nn.functional as F
@@ -15,6 +20,7 @@ from torch import Tensor, nn
 from quickgrok.data import Example, Operation, make_dataset
 
 ModelName = Literal["transformer", "mlp"]
+GROK_ACC = 0.99  # test accuracy that counts as grokked
 
 
 class Checkpoint(TypedDict):
@@ -139,12 +145,21 @@ def train(
     eval_every: int,
     save_every: int,
     out_dir: Path,
+    probe_every: int = 0,
+    probe_layer: int = 0,
+    probe_harmonics: int = 4,
+    stop_after_grok: int | None = None,
 ) -> None:
     """Full-batch AdamW training.
 
     Every `eval_every` steps, losses and accuracies go to `out_dir/metrics.json`; every
     `save_every` steps (a multiple of `eval_every`) a checkpoint is saved and progress printed.
+    `probe_every > 0` adds a `ProbeHook` writing `out_dir/probe.jsonl`. With `stop_after_grok`,
+    training ends that many steps after test accuracy first reaches GROK_ACC.
     """
+    # Imported here because accel (via regress) imports this module.
+    from quickgrok.accel import Accelerator, Hook, ProbeHook
+
     assert save_every % eval_every == 0, "save_every must be a multiple of eval_every"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(seed)
@@ -157,10 +172,25 @@ def train(
         model.parameters(), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.98)
     )
     out_dir.mkdir(parents=True, exist_ok=True)
+    hooks: list[Hook] = []
+    if probe_every:
+        hooks.append(
+            ProbeHook(
+                x_train,
+                p,
+                out_dir / "probe.jsonl",
+                probe_layer,
+                probe_every,
+                probe_harmonics,
+                seed,
+            )
+        )
+    accel = Accelerator(model, hooks)
     history: list[Metrics] = []
+    end = steps
 
     for step in range(steps + 1):
-        if step % eval_every == 0:
+        if step % eval_every == 0 or step == end:
             train_loss, train_acc = evaluate(model, x_train, y_train)
             val_loss, val_acc = evaluate(model, x_val, y_val)
             norm = torch.cat([q.detach().flatten() for q in model.parameters()]).norm()
@@ -174,7 +204,9 @@ def train(
                     "weight_norm": norm.item(),
                 }
             )
-        if step % save_every == 0:
+            if stop_after_grok is not None and end == steps and val_acc >= GROK_ACC:
+                end = min(steps, step + stop_after_grok)
+        if step % save_every == 0 or step == end:
             print(
                 f"step {step:6d}  train_loss {train_loss:.4f}  val_loss {val_loss:.4f}"
                 f"  train_acc {train_acc:.3f}  val_acc {val_acc:.3f}"
@@ -193,10 +225,14 @@ def train(
             }
             torch.save(ckpt, out_dir / f"step_{step:06d}.pt")
             (out_dir / "metrics.json").write_text(json.dumps(history))
+        if step == end:
+            break
         loss = F.cross_entropy(model(x_train), y_train)
         opt.zero_grad()
         loss.backward()
+        accel.after_backward(step)
         opt.step()
+        opt = accel.after_step(step, opt)
 
 
 def main() -> None:
@@ -214,6 +250,15 @@ def main() -> None:
     parser.add_argument("--eval-every", type=int, default=100)
     parser.add_argument("--save-every", type=int, default=500)
     parser.add_argument("--out-dir", type=Path, default=None)
+    parser.add_argument("--probe-every", type=int, default=0, help="0 = no probe")
+    parser.add_argument("--probe-layer", type=int, default=0)
+    parser.add_argument("--probe-harmonics", type=int, default=4)
+    parser.add_argument(
+        "--stop-after-grok",
+        type=int,
+        default=None,
+        help="end training this many steps after test acc first reaches 99%%",
+    )
     args = parser.parse_args()
     out_dir = args.out_dir or Path("runs") / f"{args.model}_p{args.p}_{args.op}"
     train(
@@ -229,8 +274,16 @@ def main() -> None:
         args.eval_every,
         args.save_every,
         out_dir,
+        args.probe_every,
+        args.probe_layer,
+        args.probe_harmonics,
+        args.stop_after_grok,
     )
 
 
 if __name__ == "__main__":
-    main()
+    # Run via the importable module, so the model classes are the same objects that accel and
+    # regress import (under `python -m`, this file is `__main__`, a second copy of the module).
+    from quickgrok.train import main as run_main
+
+    run_main()
