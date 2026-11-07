@@ -1,5 +1,7 @@
 # Online weight nowcasting (2026-11-07)
 
+> **Read with `reports/tuned_baseline.md`.** The +39% below is measured against vanilla at lr 1e-3, wd 1.0. Plain training with a tuned learning rate and weight decay groks up to ~18× faster (lr·wd scaling), so whether nowcasting adds anything on top of a tuned baseline is still open.
+
 **Question.** Can an online "nowcaster" cut the grokking plateau short? It forecasts where the weights are heading from the current run's own recent history and jumps there. It never uses a grokked run or test data. Omnigrok's account is that weight decay slowly shrinks the weights into a "generalising" norm band. If that is right, a forecaster that extrapolates the slow drift should shortcut it.
 
 ## Setup
