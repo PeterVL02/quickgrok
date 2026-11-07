@@ -31,7 +31,7 @@ from quickgrok.accel import (
     captured_energy,
     fourier_basis,
     levels_basis,
-    project,
+    self_expr_basis,
     svd_basis,
     svd_vectors,
 )
@@ -59,11 +59,6 @@ class RunCapture(TypedDict):
     captures: dict[str, list[np.ndarray]]
 
 
-def center(W: Tensor) -> Tensor:
-    """Columns of W (n, d) with their mean over the n symbols removed, as rows (d, n)."""
-    return (W - W.mean(0)).T
-
-
 def capture_fourier(W: Tensor) -> Tensor:
     """Capture (d,) of each column of W by the harmonics of its own best base frequency."""
     cols = W.T
@@ -85,23 +80,11 @@ def capture_levels(W: Tensor, n_levels: int) -> Tensor:
     return captured_energy((basis, basis), cols, cols)
 
 
-def capture_self_expr(W: Tensor, q: int = 8) -> Tensor:
-    """Capture (d,) of each column by `q` other columns of W chosen by greedy OMP."""
-    x = center(W)  # (d, n)
-    atoms = x / x.norm(dim=1, keepdim=True).clamp_min(1e-12)
-    d = len(x)
-    chosen = torch.zeros(d, 0, dtype=torch.long)
-    residual = x
-    for _ in range(q):
-        corr = (residual @ atoms.T).abs()
-        corr.fill_diagonal_(-1)
-        corr.scatter_(1, chosen, -1)
-        chosen = torch.cat([chosen, corr.argmax(1, keepdim=True)], 1)
-        residual = x - project(atoms[chosen].transpose(1, 2), x)
-    total = (x**2).sum(-1)
-    return torch.where(
-        total > 1e-12, 1 - (residual**2).sum(-1) / total.clamp_min(1e-12), torch.nan
-    )
+def capture_self_expr(W: Tensor) -> Tensor:
+    """Capture (d,) of each column by 8 other columns of W chosen by greedy OMP."""
+    cols = W.T
+    basis = self_expr_basis(W, list(range(W.shape[1])), M - 1)
+    return captured_energy((basis, basis), cols, cols)
 
 
 def capture_all(U: Tensor, V: Tensor) -> dict[str, Tensor]:

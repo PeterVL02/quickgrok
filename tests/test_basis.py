@@ -17,6 +17,7 @@ from quickgrok.accel import (
     make_basis,
     project,
     random_basis,
+    self_expr_basis,
 )
 from quickgrok.data import S5, S5_ORDER, compose_s5, make_dataset
 from quickgrok.models import GrokMLP
@@ -103,6 +104,22 @@ def test_levels() -> None:
     assert energy_of("levels_2", U, V, [0]) < 1 - 1e-3  # v has three levels
 
 
+def test_self_expr() -> None:
+    """A column in the span of 3 other columns is captured fully; q is respected; never itself."""
+    U, V = noisy_weights()
+    U[:, 0] = 2 * U[:, 5] - U[:, 40] + 0.5 * U[:, 300] + 1.0
+    for q in (3, 8):
+        basis = self_expr_basis(U, [0, 1], q)
+        assert basis.shape == (2, N, q + 1)
+        assert (torch.linalg.matrix_rank(basis) == q + 1).all()
+        assert (basis[:, :, 0].std(-1) < 1e-9).all()  # constant first
+        energy = captured_energy((basis, basis), U[:, [0, 1]].T, U[:, [0, 1]].T)
+        assert energy[0] > 1 - 1e-9 and energy[1] < 0.9  # noise: it cannot pick itself
+    (bu, bv), names, _ = make_basis("self_expr", U, V, [0], M, seed=0)
+    assert names == ["self_expr"] and bu.shape == (1, N, M)
+    assert not torch.allclose(bu, bv)  # u from U, v from V
+
+
 def test_random_seeded() -> None:
     """random is reproducible for a fixed seed and differs across seeds and neurons."""
     a, b = random_basis([4, 9], N, M, seed=3), random_basis([4, 9], N, M, seed=3)
@@ -182,6 +199,7 @@ if __name__ == "__main__":
     test_capture()
     test_auto()
     test_levels()
+    test_self_expr()
     test_random_seeded()
     test_s5()
     test_check_r2_uses_training_check_rows()

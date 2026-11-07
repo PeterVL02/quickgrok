@@ -161,7 +161,15 @@ class ProbeHook(Hook):
 SubstitutionMode = Literal["project", "module"]
 # "probe": harmonics of the activation fit's k* (T6). The others are chosen from the weights.
 BasisName = Literal[
-    "probe", "fourier", "poly", "svd", "random", "auto", "levels_2", "levels_3"
+    "probe",
+    "fourier",
+    "poly",
+    "svd",
+    "random",
+    "auto",
+    "levels_2",
+    "levels_3",
+    "self_expr",
 ]
 BasisPair = tuple[
     Tensor, Tensor
@@ -323,6 +331,29 @@ def project(basis: Tensor, cols: Tensor) -> Tensor:
     return expand(basis, fit_coef(basis, cols))
 
 
+def self_expr_basis(W: Tensor, neurons: list[int], q: int = 8) -> Tensor:
+    """Per neuron i: the constant plus q other columns of W (n, d), picked by greedy OMP.
+
+    The mean-removed column W[:, i] is matched against the mean-removed, normalised other
+    columns (never itself). The snapshot of the chosen columns and the constant is
+    orthonormalised. Returns (k, n, q + 1) with unit-RMS columns.
+    """
+    x = (W - W.mean(0)).T  # (d, n)
+    atoms = x / x.norm(dim=1, keepdim=True).clamp_min(1e-12)
+    target = x[neurons]
+    chosen = torch.tensor(neurons)[
+        :, None
+    ]  # column 0 = the neuron itself, never a pick
+    residual = target
+    for _ in range(q):
+        corr = (residual @ atoms.T).abs().scatter(1, chosen, -1)
+        chosen = torch.cat([chosen, corr.argmax(1, keepdim=True)], 1)
+        residual = target - project(atoms[chosen[:, 1:]].transpose(1, 2), target)
+    picked = atoms[chosen[:, 1:]].transpose(1, 2)  # (k, n, q)
+    basis = torch.cat([torch.ones_like(picked[..., :1]), picked], -1)
+    return unit_rms(torch.linalg.qr(basis).Q)
+
+
 def captured_energy(bases: BasisPair, u: Tensor, v: Tensor) -> Tensor:
     """Share (k,) of the energy of the mean-removed columns u, v (k, n) inside their bases.
 
@@ -343,7 +374,8 @@ def make_basis(
     """Bases (k, n, m) for `neurons` of the input weights U, V (n, d), chosen from the weights.
 
     Returns (bases of the u and v columns, basis name per neuron, fourier k per neuron or None).
-    "levels_L" fits each column on its own (m = L); every other basis is shared by u and v.
+    "levels_L" (m = L) and "self_expr" (OMP over the other columns of U for u, of V for v)
+    fit each column on its own; every other basis is shared by u and v.
     "auto" picks per neuron the candidate in `AUTO_CANDIDATES` with the highest captured
     energy (ties: svd). Raises ValueError for "probe", which is built from activation fits.
     """
@@ -363,6 +395,9 @@ def make_basis(
     if name in ("levels_2", "levels_3"):
         n_levels = int(name[-1])
         bases = (levels_basis(u, n_levels), levels_basis(v, n_levels))
+        return bases, [name] * len(neurons), ks
+    if name == "self_expr":
+        bases = (self_expr_basis(U, neurons, m - 1), self_expr_basis(V, neurons, m - 1))
         return bases, [name] * len(neurons), ks
     if name == "probe":
         raise ValueError("the probe basis comes from activation fits, not weights")
@@ -463,7 +498,7 @@ class SubstitutionHook(ProbeHook):
     >= `tau_share` and check-split R^2 >= `tau_r2`. `random_k` (control, probe only) swaps each
     k* for a uniformly random other frequency, seeded by `seed`.
     Any other basis is chosen from the weights by `make_basis` (snapshot at trigger time; for
-    "levels_L" u and v get their own L-group bases); trigger: captured energy >= `tau_energy`
+    "levels_L" and "self_expr" u and v get their own bases); trigger: captured energy >= `tau_energy`
     and `check_r2` >= `tau_r2`.
     `sub_all_at` (a probe step) ignores the thresholds: every live neuron is substituted at that
     step and none at any other. Appends one `SubstitutionRecord` per event to `log_path`
