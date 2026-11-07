@@ -84,6 +84,8 @@ def train(
     substitute: Literal["none"] | SubstitutionMode = "none",
     tau_share: float = 0.7,
     tau_r2: float = 0.8,
+    random_k: bool = False,
+    sub_all_at: int | None = None,
 ) -> None:
     """Full-batch AdamW training.
 
@@ -91,9 +93,9 @@ def train(
     `save_every` steps (a multiple of `eval_every`) a checkpoint is saved and progress printed.
     `probe_every > 0` adds a `ProbeHook` writing `out_dir/probe.jsonl`; with `substitute` other
     than "none" it is a `SubstitutionHook` (thresholds `tau_share`, `tau_r2`) that also writes
-    `out_dir/substitutions.jsonl`. Checkpoints and `weight_norm` use the effective weights.
-    With `stop_after_grok`, training ends that many steps after test accuracy first reaches
-    GROK_ACC.
+    `out_dir/substitutions.jsonl` (see `SubstitutionHook` for `random_k` and `sub_all_at`).
+    Checkpoints and `weight_norm` use the effective weights. With `stop_after_grok`, training
+    ends that many steps after test accuracy first reaches GROK_ACC.
     """
     assert save_every % eval_every == 0, "save_every must be a multiple of eval_every"
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -127,6 +129,8 @@ def train(
                 tau_r2=tau_r2,
                 y_train=y_train,
                 log_path=out_dir / "substitutions.jsonl",
+                random_k=random_k,
+                sub_all_at=sub_all_at,
             )
         )
     elif probe_every:
@@ -214,9 +218,22 @@ def main() -> None:
     )
     parser.add_argument("--tau-share", type=float, default=0.7)
     parser.add_argument("--tau-r2", type=float, default=0.8)
+    parser.add_argument(
+        "--random-k",
+        action="store_true",
+        help="control: substitute with a random frequency instead of the fitted k*",
+    )
+    parser.add_argument(
+        "--sub-all-at",
+        type=int,
+        default=None,
+        help="substitute every live neuron at this probe step, ignoring the thresholds",
+    )
     args = parser.parse_args()
     if args.substitute != "none" and args.probe_every <= 0:
         parser.error("--substitute needs --probe-every > 0")
+    if args.substitute == "none" and (args.random_k or args.sub_all_at is not None):
+        parser.error("--random-k and --sub-all-at need --substitute")
     out_dir = args.out_dir or Path("runs") / f"{args.model}_p{args.p}_{args.op}"
     train(
         args.model,
@@ -238,6 +255,8 @@ def main() -> None:
         args.substitute,
         args.tau_share,
         args.tau_r2,
+        args.random_k,
+        args.sub_all_at,
     )
 
 

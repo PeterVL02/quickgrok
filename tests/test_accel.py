@@ -18,6 +18,7 @@ from quickgrok.accel import (
     ProbeHook,
     SubstitutionHook,
     SubstitutionMode,
+    SubstitutionRecord,
     effective_state_dict,
     expand,
     fit_coef,
@@ -88,19 +89,38 @@ P = 97
 NEURONS, KS = [0, 5, 9], [3, 7, 20]
 
 
-def make_hook(mode: SubstitutionMode, tmp: Path) -> SubstitutionHook:
-    """A substitution hook on the seed-100 training split, logging into `tmp`."""
+def make_hook(
+    mode: SubstitutionMode,
+    tmp: Path,
+    tau_share: float = 0.7,
+    tau_r2: float = 0.8,
+    random_k: bool = False,
+    sub_all_at: int | None = None,
+) -> SubstitutionHook:
+    """A substitution hook (probe every 2 steps) on the seed-100 split, logging into `tmp`."""
     x_train, y_train = to_tensors(make_dataset(P, "add", 0.3, seed=100)[0], "cpu")
     return SubstitutionHook(
         x_train,
         P,
         tmp / f"{mode}_probe.jsonl",
+        every=2,
+        seed=100,
         mode=mode,
-        tau_share=0.7,
-        tau_r2=0.8,
+        tau_share=tau_share,
+        tau_r2=tau_r2,
         y_train=y_train,
         log_path=tmp / f"{mode}_subs.jsonl",
+        random_k=random_k,
+        sub_all_at=sub_all_at,
     )
+
+
+def run_hook(hook: SubstitutionHook, steps: int) -> list[SubstitutionRecord]:
+    """Call the hook's `after_step` on a fresh MLP for `steps` steps; return the logged events."""
+    model, opt = make_mlp()
+    for step in range(steps):
+        opt = hook.after_step(step, model, opt) or opt
+    return [json.loads(line) for line in hook.log_path.read_text().splitlines()]
 
 
 def make_mlp() -> tuple[GrokMLP, torch.optim.Optimizer]:
@@ -198,6 +218,37 @@ def test_effective_state_dict() -> None:
     assert torch.allclose(fresh(x), model(x), atol=1e-6)
 
 
+def test_random_k() -> None:
+    """Random k never equals the fitted k*, and the same seed gives the same draws."""
+    with tempfile.TemporaryDirectory() as tmp:
+        runs = [
+            run_hook(make_hook("project", Path(tmp), 0, -math.inf, random_k=True), 1)
+            for _ in range(2)
+        ]
+    assert runs[0][0]["k"] == runs[1][0]["k"]
+    event = runs[0][0]
+    assert len(event["k"]) == 512
+    assert all(k != f for k, f in zip(event["k"], event["k_fitted"]))
+
+
+def test_sub_all_at() -> None:
+    """With sub_all_at=2 every live neuron is substituted once at step 2, despite tau_r2 > 1."""
+    with tempfile.TemporaryDirectory() as tmp:
+        hook = make_hook("module", Path(tmp), 1, 2, sub_all_at=2)
+        events = run_hook(hook, 7)
+        probes = [json.loads(line) for line in hook.out_path.read_text().splitlines()]
+    assert [e["step"] for e in events] == [2] and [r["step"] for r in probes] == [
+        0,
+        2,
+        4,
+        6,
+    ]
+    live = [i for i, k in enumerate(probes[1]["top_freq"]) if k is not None]
+    assert events[0]["neurons"] == live and events[0]["n_substituted_total"] == len(
+        live
+    )
+
+
 if __name__ == "__main__":
     test_probe_split()
     test_harmonic_share()
@@ -206,4 +257,6 @@ if __name__ == "__main__":
     test_module_matches_project()
     test_grow_optimizer()
     test_effective_state_dict()
+    test_random_k()
+    test_sub_all_at()
     print("ok")

@@ -6,6 +6,7 @@ Call `accel.after_backward(step)` between `loss.backward()` and `opt.step()`, an
 
 import json
 import math
+import random
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -159,7 +160,8 @@ class SubstitutionRecord(TypedDict):
     step: int
     mode: SubstitutionMode
     neurons: list[int]  # newly substituted at this step
-    k: list[int]  # base frequency k* per new neuron
+    k_fitted: list[int]  # fitted base frequency k* per new neuron
+    k: list[int]  # frequency used: k_fitted, or a random other one with random_k
     train_loss_before: float
     train_loss_after: float
     n_substituted_total: int
@@ -270,7 +272,9 @@ class SubstitutionHook(ProbeHook):
     U[:, i], V[:, i] of a triggered neuron are projected onto the harmonics of its k*.
     "project" overwrites them in place and lets them train freely afterwards; "module" keeps them
     in that span for good (trainable coefficients via `HarmonicColumns`). Only GrokMLP layer 0.
-    Appends one `SubstitutionRecord` per event to `log_path` (truncated on construction).
+    `random_k` (control) swaps each k* for a uniformly random other frequency, seeded by `seed`.
+    `sub_all_at` (a probe step) ignores the thresholds: every live neuron is substituted at that
+    step and none at any other. Appends one `SubstitutionRecord` per event to `log_path` (truncated on construction).
     """
 
     def __init__(
@@ -288,15 +292,24 @@ class SubstitutionHook(ProbeHook):
         tau_r2: float,
         y_train: Tensor,
         log_path: Path,
+        random_k: bool = False,
+        sub_all_at: int | None = None,
     ) -> None:
         if layer != 0:
             raise ValueError(f"substitution only supports GrokMLP layer 0, got {layer}")
+        if sub_all_at is not None and sub_all_at % every:
+            raise ValueError(
+                f"sub_all_at={sub_all_at} is not a probe step (every {every})"
+            )
         super().__init__(x_train, p, out_path, layer, every, n_harmonics, seed)
         self.mode = mode
         self.tau_share = tau_share
         self.tau_r2 = tau_r2
         self.y_train = y_train
         self.log_path = log_path
+        self.random_k = random_k
+        self.sub_all_at = sub_all_at
+        self.rng = random.Random(seed)
         self.substituted: set[int] = set()
         log_path.write_text("")
 
@@ -345,21 +358,36 @@ class SubstitutionHook(ProbeHook):
         if not isinstance(model, GrokMLP):
             raise TypeError(f"substitution only supports GrokMLP, got {type(model)}")
         record = self.log_probe(step, model)
+        all_now = step == self.sub_all_at
+        if self.sub_all_at is not None and not all_now:
+            return None
         picks = [
             (i, k)
             for i, (k, share, r2) in enumerate(
                 zip(record["top_freq"], record["harmonic_share"], record["r2_check"])
             )
             if k is not None
-            and share is not None
-            and r2 is not None
-            and share >= self.tau_share
-            and r2 >= self.tau_r2
             and i not in self.substituted
+            and (
+                all_now
+                or (
+                    share is not None
+                    and r2 is not None
+                    and share >= self.tau_share
+                    and r2 >= self.tau_r2
+                )
+            )
         ]
         if not picks:
             return None
-        neurons, ks = [i for i, _ in picks], [k for _, k in picks]
+        neurons, fitted = [i for i, _ in picks], [k for _, k in picks]
+        n_k = (self.p - 1) // 2
+        ks = [
+            self.rng.choice([j for j in range(1, n_k + 1) if j != k])
+            if self.random_k
+            else k
+            for k in fitted
+        ]
         loss_before = self.train_loss(model)
         new_optimizer = self.substitute(model, neurons, ks, optimizer)
         self.substituted.update(neurons)
@@ -367,6 +395,7 @@ class SubstitutionHook(ProbeHook):
             "step": step,
             "mode": self.mode,
             "neurons": neurons,
+            "k_fitted": fitted,
             "k": ks,
             "train_loss_before": loss_before,
             "train_loss_after": self.train_loss(model),
