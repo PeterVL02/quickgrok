@@ -8,6 +8,7 @@ import json
 import math
 import random
 from collections.abc import Callable, Iterator
+from itertools import pairwise
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict, cast
 
@@ -159,7 +160,12 @@ class ProbeHook(Hook):
 
 SubstitutionMode = Literal["project", "module"]
 # "probe": harmonics of the activation fit's k* (T6). The others are chosen from the weights.
-BasisName = Literal["probe", "fourier", "poly", "svd", "random", "auto"]
+BasisName = Literal[
+    "probe", "fourier", "poly", "svd", "random", "auto", "levels_2", "levels_3"
+]
+BasisPair = tuple[
+    Tensor, Tensor
+]  # per-neuron bases (k, n, m) for the u and the v columns
 AUTO_CANDIDATES: list[BasisName] = ["svd", "fourier", "poly"]  # order breaks ties
 
 
@@ -277,19 +283,54 @@ def random_basis(neurons: list[int], n: int, m: int, seed: int) -> Tensor:
     return unit_rms(torch.stack(bases))
 
 
+def segment_sse(s1: Tensor, s2: Tensor, lo: Tensor, hi: Tensor) -> Tensor:
+    """Within-segment sum of squares of sorted values [lo, hi) from prefix sums s1, s2 (k, n + 1)."""
+    total = s1.gather(1, hi) - s1.gather(1, lo)
+    return s2.gather(1, hi) - s2.gather(1, lo) - total**2 / (hi - lo)
+
+
+def levels_basis(cols: Tensor, n_levels: int) -> Tensor:
+    """Indicators (k, n, n_levels) of the optimal 1-D k-means groups of each column's values.
+
+    `cols` (k, n); n_levels is 2 or 3. Optimal 1-D clusters are contiguous in sorted order, so
+    every split is tried. The indicators sum to the constant. Unit-RMS columns.
+    """
+    x, order = cols.sort(-1)
+    k, n = x.shape
+    zero = x.new_zeros(k, 1)
+    s1 = torch.cat([zero, x.cumsum(-1)], 1)
+    s2 = torch.cat([zero, (x**2).cumsum(-1)], 1)
+    if n_levels == 2:
+        inner = [torch.arange(1, n)]
+    else:
+        inner = list(torch.triu_indices(n - 1, n - 1, offset=1) + 1)  # cuts i < j
+    bounds = [torch.zeros_like(inner[0]), *inner, torch.full_like(inner[0], n)]
+    sse = torch.stack(
+        [
+            segment_sse(s1, s2, lo.expand(k, -1), hi.expand(k, -1))
+            for lo, hi in pairwise(bounds)
+        ]
+    ).sum(0)
+    best = sse.argmin(1)
+    cuts = [b[best, None] for b in bounds]  # (k, 1) each
+    rank = order.argsort(-1)  # position of each symbol in sorted order
+    groups = [(rank >= lo) & (rank < hi) for lo, hi in pairwise(cuts)]
+    return unit_rms(torch.stack(groups, -1).to(cols.dtype))
+
+
 def project(basis: Tensor, cols: Tensor) -> Tensor:
     """Least-squares projection (k, n) of columns `cols` (k, n) onto `basis` (k, n, m)."""
     return expand(basis, fit_coef(basis, cols))
 
 
-def captured_energy(basis: Tensor, u: Tensor, v: Tensor) -> Tensor:
-    """Share (k,) of the energy of the mean-removed columns u, v (k, n) inside `basis` (k, n, m).
+def captured_energy(bases: BasisPair, u: Tensor, v: Tensor) -> Tensor:
+    """Share (k,) of the energy of the mean-removed columns u, v (k, n) inside their bases.
 
-    The basis contains the constant, so this is ||P[u, v] - mean||^2 / ||[u, v] - mean||^2.
-    nan for a neuron whose columns are both constant.
+    `bases` holds the bases (k, n, m) of u and of v; each contains the constant, so this is
+    ||P[u, v] - mean||^2 / ||[u, v] - mean||^2. nan for a neuron whose columns are both constant.
     """
     num, den = torch.zeros(len(u), dtype=u.dtype), torch.zeros(len(u), dtype=u.dtype)
-    for c in (u, v):
+    for basis, c in zip(bases, (u, v)):
         mean = c.mean(-1, keepdim=True)
         num = num + ((project(basis, c) - mean) ** 2).sum(-1)
         den = den + ((c - mean) ** 2).sum(-1)
@@ -298,12 +339,13 @@ def captured_energy(basis: Tensor, u: Tensor, v: Tensor) -> Tensor:
 
 def make_basis(
     name: BasisName, U: Tensor, V: Tensor, neurons: list[int], m: int, seed: int
-) -> tuple[Tensor, list[BasisName], list[int | None]]:
-    """Basis (k, n, m) for `neurons` of the input weights U, V (n, d), chosen from the weights.
+) -> tuple[BasisPair, list[BasisName], list[int | None]]:
+    """Bases (k, n, m) for `neurons` of the input weights U, V (n, d), chosen from the weights.
 
-    Returns (basis, basis name per neuron, fourier k per neuron or None). "auto" picks per
-    neuron the candidate in `AUTO_CANDIDATES` with the highest captured energy (ties: svd).
-    Raises ValueError for "probe", which is built from activation fits instead.
+    Returns (bases of the u and v columns, basis name per neuron, fourier k per neuron or None).
+    "levels_L" fits each column on its own (m = L); every other basis is shared by u and v.
+    "auto" picks per neuron the candidate in `AUTO_CANDIDATES` with the highest captured
+    energy (ties: svd). Raises ValueError for "probe", which is built from activation fits.
     """
     u, v = U[:, neurons].T, V[:, neurons].T
     n = U.shape[0]
@@ -318,16 +360,24 @@ def make_basis(
         candidates["svd"] = svd_basis(u, v, svd_vectors(U, V), m)
     if name == "random":
         candidates["random"] = random_basis(neurons, n, m, seed).to(u.dtype)
+    if name in ("levels_2", "levels_3"):
+        n_levels = int(name[-1])
+        bases = (levels_basis(u, n_levels), levels_basis(v, n_levels))
+        return bases, [name] * len(neurons), ks
     if name == "probe":
         raise ValueError("the probe basis comes from activation fits, not weights")
     if name != "auto":
-        return candidates[name], [name] * len(neurons), ks
+        return (candidates[name], candidates[name]), [name] * len(neurons), ks
     stack = torch.stack([candidates[c] for c in AUTO_CANDIDATES])  # (3, k, n, m)
-    energy = torch.stack([captured_energy(b, u, v) for b in stack]).nan_to_num(-1)
-    best = energy.argmax(0).tolist()  # first maximum, so ties go to svd
+    energy = torch.stack([captured_energy((b, b), u, v) for b in stack])
+    best = energy.nan_to_num(-1).argmax(0).tolist()  # first maximum: ties go to svd
     names = [AUTO_CANDIDATES[j] for j in best]
     basis = stack[torch.tensor(best), torch.arange(len(neurons))]
-    return basis, names, [k if c == "fourier" else None for k, c in zip(ks, names)]
+    return (
+        (basis, basis),
+        names,
+        [k if c == "fourier" else None for k, c in zip(ks, names)],
+    )
 
 
 class HarmonicColumns(nn.Module):
@@ -412,8 +462,9 @@ class SubstitutionHook(ProbeHook):
     `basis="probe"` (T6): the harmonics of the activation fit's k*; trigger: harmonic share
     >= `tau_share` and check-split R^2 >= `tau_r2`. `random_k` (control, probe only) swaps each
     k* for a uniformly random other frequency, seeded by `seed`.
-    Any other basis is chosen from the weights by `make_basis`; trigger: captured energy
-    >= `tau_energy` and `check_r2` >= `tau_r2`.
+    Any other basis is chosen from the weights by `make_basis` (snapshot at trigger time; for
+    "levels_L" u and v get their own L-group bases); trigger: captured energy >= `tau_energy`
+    and `check_r2` >= `tau_r2`.
     `sub_all_at` (a probe step) ignores the thresholds: every live neuron is substituted at that
     step and none at any other. Appends one `SubstitutionRecord` per event to `log_path`
     (truncated on construction).
@@ -477,29 +528,31 @@ class SubstitutionHook(ProbeHook):
     ) -> torch.optim.Optimizer | None:
         """Apply the mode to `neurons` with base frequencies `ks`; return a new optimizer if needed."""
         basis = harmonic_basis(ks, self.p, self.n_harmonics)
-        return self.apply_basis(model, neurons, basis, optimizer)
+        return self.apply_basis(model, neurons, (basis, basis), optimizer)
 
     def apply_basis(
         self,
         model: GrokMLP,
         neurons: list[int],
-        basis: Tensor,
+        bases: BasisPair,
         optimizer: torch.optim.Optimizer,
     ) -> torch.optim.Optimizer | None:
-        """Apply the mode to `neurons` with per-neuron bases (k, n, m); return a new optimizer if needed."""
+        """Apply the mode to `neurons` with bases (k, n, m) for U and V; return a new optimizer if needed."""
         device = model.bias.device
         idx = torch.tensor(neurons, device=device)
-        basis = basis.to(device=device, dtype=model.bias.dtype)
-        embeds = (model.embed_a, model.embed_b)
+        pairs = [
+            (e, b.to(device=device, dtype=model.bias.dtype))
+            for e, b in zip((model.embed_a, model.embed_b), bases)
+        ]
         if self.mode == "project":
             with torch.no_grad():
-                for e in embeds:
+                for e, basis in pairs:
                     e.weight[:, idx] = expand(
                         basis, fit_coef(basis, e.weight[:, idx].T)
                     ).T
             return None
         grown: dict[nn.Parameter, nn.Parameter] = {}
-        for e in embeds:
+        for e, basis in pairs:
             if not parametrize.is_parametrized(e, "weight"):
                 columns = HarmonicColumns(self.p, basis.shape[-1], device)
                 parametrize.register_parametrization(e, "weight", columns)
@@ -519,7 +572,7 @@ class SubstitutionHook(ProbeHook):
         )
         return U, V, bias
 
-    def check_r2(self, model: GrokMLP, neurons: list[int], basis: Tensor) -> Tensor:
+    def check_r2(self, model: GrokMLP, neurons: list[int], bases: BasisPair) -> Tensor:
         """R^2 (k,) of each neuron's activation against its activation with u, v projected.
 
         Measured on the check split of the training rows only (`check_a`, `check_b`).
@@ -532,11 +585,12 @@ class SubstitutionHook(ProbeHook):
             """Layer-0 activations (N_check, k) for input columns u, v (k, n)."""
             return torch.relu(u[:, self.check_a] + v[:, self.check_b] + c).T
 
-        return score_r2(activate(u, v), activate(project(basis, u), project(basis, v)))
+        projected = activate(project(bases[0], u), project(bases[1], v))
+        return score_r2(activate(u, v), projected)
 
     def pick_probe(
         self, record: ProbeRecord, live: list[int], all_now: bool
-    ) -> tuple[list[int], Tensor, EventFields]:
+    ) -> tuple[list[int], BasisPair, EventFields]:
         """Probe-basis trigger: (neurons, their harmonic bases, the event's per-neuron fields)."""
         picks = [
             (i, k)
@@ -561,17 +615,17 @@ class SubstitutionHook(ProbeHook):
             for k in fitted
         ]
         basis = harmonic_basis(ks, self.p, self.n_harmonics)
-        return neurons, basis, {"k_fitted": list(fitted), "k": list(ks)}
+        return neurons, (basis, basis), {"k_fitted": list(fitted), "k": list(ks)}
 
     def pick_generic(
         self, model: GrokMLP, live: list[int], all_now: bool
-    ) -> tuple[list[int], Tensor, EventFields]:
+    ) -> tuple[list[int], BasisPair, EventFields]:
         """Weight-basis trigger: (neurons, their bases, the event's per-neuron fields)."""
         U, V, _ = self.input_weights(model)
         m = 1 + 2 * self.n_harmonics
-        basis, names, ks = make_basis(self.basis, U, V, live, m, self.seed)
-        energy = captured_energy(basis, U[:, live].T, V[:, live].T)
-        r2 = self.check_r2(model, live, basis)
+        bases, names, ks = make_basis(self.basis, U, V, live, m, self.seed)
+        energy = captured_energy(bases, U[:, live].T, V[:, live].T)
+        r2 = self.check_r2(model, live, bases)
         keep = [
             j
             for j in range(len(live))
@@ -584,7 +638,7 @@ class SubstitutionHook(ProbeHook):
             "energy": drop_nan(energy[keep].tolist()),
             "r2_check": drop_nan(r2[keep].tolist()),
         }
-        return [live[j] for j in keep], basis[keep], fields
+        return [live[j] for j in keep], (bases[0][keep], bases[1][keep]), fields
 
     def after_step(
         self, step: int, model: nn.Module, optimizer: torch.optim.Optimizer
@@ -605,7 +659,7 @@ class SubstitutionHook(ProbeHook):
         ]
         if not live:
             return None
-        neurons, basis, fields = (
+        neurons, bases, fields = (
             self.pick_probe(record, live, all_now)
             if self.basis == "probe"
             else self.pick_generic(model, live, all_now)
@@ -613,7 +667,7 @@ class SubstitutionHook(ProbeHook):
         if not neurons:
             return None
         loss_before = self.train_loss(model)
-        new_optimizer = self.apply_basis(model, neurons, basis, optimizer)
+        new_optimizer = self.apply_basis(model, neurons, bases, optimizer)
         self.substituted.update(neurons)
         event: SubstitutionRecord = {
             "step": step,

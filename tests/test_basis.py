@@ -39,8 +39,8 @@ def energy_of(
     name: BasisName, U: torch.Tensor, V: torch.Tensor, neurons: list[int]
 ) -> torch.Tensor:
     """Captured energy of `neurons` in basis `name`."""
-    basis, _, _ = make_basis(name, U, V, neurons, M, seed=0)
-    return captured_energy(basis, U[:, neurons].T, V[:, neurons].T)
+    bases, _, _ = make_basis(name, U, V, neurons, M, seed=0)
+    return captured_energy(bases, U[:, neurons].T, V[:, neurons].T)
 
 
 def test_shapes() -> None:
@@ -49,8 +49,8 @@ def test_shapes() -> None:
     neurons = [0, 3, 7, 100]
     names_all: list[BasisName] = ["fourier", "poly", "svd", "random", "auto"]
     for name in names_all:
-        basis, names, ks = make_basis(name, U, V, neurons, M, seed=0)
-        assert basis.shape == (len(neurons), N, M), name
+        (basis, basis_v), names, ks = make_basis(name, U, V, neurons, M, seed=0)
+        assert basis is basis_v and basis.shape == (len(neurons), N, M), name
         assert len(names) == len(ks) == len(neurons)
         assert (torch.linalg.matrix_rank(basis) == M).all(), name
         first = basis[:, :, 0]
@@ -62,9 +62,9 @@ def test_capture() -> None:
     U, V = noisy_weights()
     U[:, 0] = torch.cos(2 * math.pi * 5 * GRID / N + 0.3) + 2
     V[:, 0] = torch.sin(2 * math.pi * 15 * GRID / N)  # 15 = 3 * 5, a harmonic of 5
-    basis, _, ks = make_basis("fourier", U, V, [0], M, seed=0)
+    bases, _, ks = make_basis("fourier", U, V, [0], M, seed=0)
     assert ks == [5]
-    assert captured_energy(basis, U[:, :1].T, V[:, :1].T).item() > 1 - 1e-9
+    assert captured_energy(bases, U[:, :1].T, V[:, :1].T).item() > 1 - 1e-9
 
     U[:, 1], V[:, 1] = X**3 - X, 2 * X**2 + 1
     assert energy_of("poly", U, V, [1]).item() > 1 - 1e-9
@@ -85,6 +85,22 @@ def test_auto() -> None:
     U[:, 1] = V[:, 1] = 3 * X**2 + X
     _, names, ks = make_basis("auto", U, V, [0, 1], M, seed=0)
     assert names == ["fourier", "poly"] and ks == [7, None]
+
+
+def test_levels() -> None:
+    """levels_L fits u and v separately: L-valued columns are captured fully, the bases differ."""
+    U, V = noisy_weights()
+    U[:, 0] = torch.where(torch.cos(2 * math.pi * 3 * GRID / N) > 0, 2.0, -1.0)
+    V[:, 0] = (GRID % 3) * 1.5  # three levels, a different partition
+    (bu, bv), names, _ = make_basis("levels_3", U, V, [0, 1], M, seed=0)
+    assert bu.shape == bv.shape == (2, N, 3) and names == ["levels_3"] * 2
+    assert torch.allclose(
+        (bu > 0).sum(-1), torch.ones(2, N, dtype=torch.long)
+    )  # a partition
+    assert not torch.equal(bu[0], bv[0])
+    energy = captured_energy((bu, bv), U[:, [0, 1]].T, V[:, [0, 1]].T)
+    assert energy[0] > 1 - 1e-9 and energy[1] < 0.95  # Gaussian noise: ~0.82 expected
+    assert energy_of("levels_2", U, V, [0]) < 1 - 1e-3  # v has three levels
 
 
 def test_random_seeded() -> None:
@@ -145,9 +161,9 @@ def test_check_r2_uses_training_check_rows() -> None:
     model = GrokMLP(N)
     neurons = [0, 1, 2]
     U, V, bias = hook.input_weights(model)
-    basis, _, _ = make_basis("svd", U, V, neurons, M, seed=0)
+    bases, _, _ = make_basis("levels_3", U, V, neurons, M, seed=0)
     u, v = U[:, neurons].T, V[:, neurons].T
-    pu, pv = project(basis, u), project(basis, v)
+    pu, pv = project(bases[0], u), project(bases[1], v)
 
     def r2_on(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         """Activation R^2 of the projected neurons on the rows (a, b)."""
@@ -155,7 +171,7 @@ def test_check_r2_uses_training_check_rows() -> None:
         act = torch.relu(u[:, a] + v[:, b] + c).T
         return score_r2(act, torch.relu(pu[:, a] + pv[:, b] + c).T)
 
-    r2 = hook.check_r2(model, neurons, basis)
+    r2 = hook.check_r2(model, neurons, bases)
     assert torch.allclose(r2, r2_on(hook.check_a, hook.check_b))
     x_val, _ = to_tensors(val, "cpu")
     assert not torch.allclose(r2, r2_on(x_val[:, 0], x_val[:, 1]))
@@ -165,6 +181,7 @@ if __name__ == "__main__":
     test_shapes()
     test_capture()
     test_auto()
+    test_levels()
     test_random_seeded()
     test_s5()
     test_check_r2_uses_training_check_rows()
