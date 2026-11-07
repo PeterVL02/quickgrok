@@ -139,7 +139,8 @@ class NowcastHook(Hook):
     otherwise the parameters are restored exactly. The LSTM forecaster is
     trained at each attempt on the window ending `horizon` steps ago. Optimizer state is left
     as is. Appends one `NowcastRecord` per attempt to `out_path` (truncated on construction).
-    Plain parameters only (no parametrizations).
+    Plain parameters only (no parametrizations). `norm_only` (control) keeps each parameter
+    tensor's direction and only rescales it to the norm of its forecast.
     """
 
     def __init__(
@@ -154,6 +155,7 @@ class NowcastHook(Hook):
         k: int = 8,
         max_loss_ratio: float = 1.5,
         seed: int = 0,
+        norm_only: bool = False,
     ) -> None:
         if horizon % snapshot_every or jump_every % snapshot_every:
             raise ValueError(
@@ -171,6 +173,7 @@ class NowcastHook(Hook):
         self.jump_every = jump_every
         self.snapshot_every = snapshot_every
         self.max_loss_ratio = max_loss_ratio
+        self.norm_only = norm_only
         self.snaps: dict[int, Tensor] = {}
         self.accepted_steps: list[int] = []
         out_path.write_text("")
@@ -214,6 +217,14 @@ class NowcastHook(Hook):
         if isinstance(self.forecaster, LSTMForecaster) and train_past is not None:
             fit = self.forecaster.fit(train_past, now)
         forecast = self.forecaster.forecast(current)
+        if self.norm_only:
+            sizes = [p.numel() for p in model.parameters()]
+            forecast = torch.cat(
+                [
+                    w * f.norm() / w.norm().clamp_min(1e-12)
+                    for w, f in zip(now.split(sizes), forecast.split(sizes))
+                ]
+            )
         loss_before = self.train_loss(model)
         set_flat(model, forecast)
         loss_after = self.train_loss(model)

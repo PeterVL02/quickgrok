@@ -9,6 +9,7 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+from torch import nn
 
 from quickgrok.data import make_dataset
 from quickgrok.models import GrokMLP
@@ -52,6 +53,29 @@ def test_rejected_jump_restores() -> None:
     assert not records[0]["accepted"] and records[0]["rel_change"] > 0
 
 
+def test_norm_only_keeps_direction() -> None:
+    """An accepted norm-only jump rescales each tensor without turning it."""
+    torch.manual_seed(0)
+    train, _ = make_dataset(97, "add", 0.3, seed=0)
+    x, y = to_tensors(train, "cpu")
+    model = GrokMLP(97, d_hidden=16)
+    nn.init.normal_(model.bias)  # zero by default, which has no direction
+    opt = torch.optim.SGD(model.parameters())
+    with tempfile.TemporaryDirectory() as tmp:
+        hook = NowcastHook(
+            "linear", x, y, Path(tmp) / "n.jsonl", max_loss_ratio=1e9, norm_only=True
+        )
+        for step in range(0, 1001, 100):
+            with torch.no_grad():
+                for p in model.parameters():
+                    p.mul_(0.99)
+            before = [p.detach().clone() for p in model.parameters()]
+            hook.after_step(step, model, opt)
+    for b, p in zip(before, model.parameters()):
+        assert F.cosine_similarity(b.flatten(), p.flatten(), dim=0) > 1 - 1e-5
+        assert p.norm() < b.norm()
+
+
 def test_lstm_learns() -> None:
     """The LSTM forecaster's training loss falls on smooth synthetic trajectories."""
     torch.manual_seed(0)
@@ -82,6 +106,7 @@ def test_grokfast_lambda_zero() -> None:
 if __name__ == "__main__":
     test_linear_exact()
     test_rejected_jump_restores()
+    test_norm_only_keeps_direction()
     test_lstm_learns()
     test_grokfast_lambda_zero()
     print("ok")

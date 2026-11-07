@@ -92,6 +92,7 @@ def train(
     nowcast_every: int = 1000,
     nowcast_k: int = 8,
     nowcast_max_loss_ratio: float = 1.5,
+    nowcast_norm_only: bool = False,
     grokfast_lambda: float = 0.0,
     grokfast_alpha: float = 0.98,
 ) -> None:
@@ -158,6 +159,7 @@ def train(
                 k=nowcast_k,
                 max_loss_ratio=nowcast_max_loss_ratio,
                 seed=seed,
+                norm_only=nowcast_norm_only,
             )
         )
     accel = Accelerator(model, hooks)
@@ -265,6 +267,11 @@ def main() -> None:
         "--nowcast-k", type=int, default=8, help="snapshots per forecast"
     )
     parser.add_argument("--nowcast-max-loss-ratio", type=float, default=1.5)
+    parser.add_argument(
+        "--nowcast-norm-only",
+        action="store_true",
+        help="control: rescale each tensor to its forecast's norm, keep its direction",
+    )
     parser.add_argument("--grokfast-lambda", type=float, default=0.0, help="0 = off")
     parser.add_argument("--grokfast-alpha", type=float, default=0.98)
     args = parser.parse_args()
@@ -300,6 +307,7 @@ def main() -> None:
         args.nowcast_every,
         args.nowcast_k,
         args.nowcast_max_loss_ratio,
+        args.nowcast_norm_only,
         args.grokfast_lambda,
         args.grokfast_alpha,
     )
