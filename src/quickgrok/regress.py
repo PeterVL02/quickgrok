@@ -19,7 +19,7 @@ from typing import Literal, TypedDict, get_args
 import torch
 from torch import Tensor
 
-from quickgrok.train import GrokTransformer, load_model
+from quickgrok.train import GrokModel, get_activation_layers, load_model
 
 Basis = Literal["poly", "trig"]
 
@@ -31,9 +31,8 @@ class NeuronFit(TypedDict):
     coef: list[float]  # one per column of the design matrix
     top_freq: int | None  # trig only: frequency k explaining the most variance
     top_freq_share: float | None  # trig only: share of explained variance from top_freq
-    freq_shares: list[
-        float
-    ]  # trig only: share per frequency k = 1..(p-1)/2; else empty
+    # trig only: share per frequency k = 1..(p-1)/2; else empty
+    freq_shares: list[float]
 
 
 def make_grid(p: int) -> tuple[Tensor, Tensor]:
@@ -42,15 +41,24 @@ def make_grid(p: int) -> tuple[Tensor, Tensor]:
     return a, b
 
 
-def record_neurons(model: GrokTransformer, neurons: list[int]) -> Tensor:
-    """Return post-ReLU MLP activations at the "=" position, shape (p*p, len(neurons))."""
+def record_neurons(
+    model: GrokModel, neurons: list[int] | None = None, layer: int = 0
+) -> Tensor:
+    """Return activations of hidden layer `layer` on all p*p inputs, shape (p*p, n_neurons).
+
+    `neurons=None` means every neuron in the layer. For the transformer, the only layer is the
+    MLP after attention, read at the "=" position.
+    """
     p = model.unembed.out_features
     a, b = make_grid(p)
     x = torch.stack([a, b, torch.full_like(a, p)], dim=1)
     acts: list[Tensor] = []
-    handle = model.mlp[1].register_forward_hook(
-        lambda _m, _i, out: acts.append(out[:, -1, neurons])
-    )
+
+    def keep(_m: torch.nn.Module, _i: tuple[Tensor, ...], out: Tensor) -> None:
+        out = out[:, -1] if out.dim() == 3 else out  # transformer: (N, seq, d)
+        acts.append(out if neurons is None else out[:, neurons])
+
+    handle = get_activation_layers(model)[layer].register_forward_hook(keep)
     with torch.no_grad():
         model(x)
     handle.remove()
@@ -147,13 +155,14 @@ def main() -> None:
     parser.add_argument("--neurons", type=int, nargs="+", required=True)
     parser.add_argument("--basis", choices=get_args(Basis), default="trig")
     parser.add_argument("--degree", type=int, default=6, help="poly basis only")
+    parser.add_argument("--layer", type=int, default=0, help="hidden layer index")
     args = parser.parse_args()
 
     for path in args.checkpoints:
         model, ckpt = load_model(path)
         p = ckpt["p"]
         a, b = make_grid(p)
-        acts = record_neurons(model, args.neurons)
+        acts = record_neurons(model, args.neurons, args.layer)
         fits = fit_neurons(acts, a, b, p, args.basis, args.degree, args.neurons)
         print(
             f"\n{path}  step {ckpt['step']}  train_acc {ckpt['train_acc']:.3f}  val_acc {ckpt['val_acc']:.3f}"

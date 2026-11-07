@@ -79,14 +79,14 @@ def make_train_mask(p: int, op: Operation, train_frac: float, seed: int) -> Tens
     return mask
 
 
-def probe_run(run_dir: Path, poly_degree: int = 6) -> ProbeResult:
+def probe_run(run_dir: Path, layer: int = 0, poly_degree: int = 6) -> ProbeResult:
     """Fit every MLP neuron at every checkpoint: trig and poly on train pairs, trig on full grid."""
     paths = sorted(run_dir.glob("step_*.pt"))
     model, ckpt = load_model(paths[0])
-    p, d_mlp = ckpt["p"], model.mlp[0].out_features
+    p = ckpt["p"]
     a, b = make_grid(p)
     mask = make_train_mask(p, ckpt["op"], ckpt["train_frac"], ckpt["seed"])
-    neurons = list(range(d_mlp))
+    neurons = list(range(record_neurons(model, layer=layer).shape[1]))
     result: ProbeResult = {
         "seed": ckpt["seed"],
         "steps": [],
@@ -99,7 +99,7 @@ def probe_run(run_dir: Path, poly_degree: int = 6) -> ProbeResult:
     }
     for path in paths:
         model, ckpt = load_model(path)
-        acts = record_neurons(model, neurons)
+        acts = record_neurons(model, neurons, layer)
         trig = fit_neurons(acts, a, b, p, "trig", 0, neurons, fit_mask=mask)
         poly = fit_neurons(acts, a, b, p, "poly", poly_degree, neurons, fit_mask=mask)
         full = [
@@ -170,7 +170,7 @@ def plot_training_curves(
     axes[2, 0].set_ylabel("parameter L2 norm", color=MUTED, fontsize=9)
     axes[0, 0].legend(frameon=False, fontsize=9)
     fig.suptitle(
-        "Grokking on a + b mod 97 (30% train): train fits by step ~1k, test jumps much later",
+        "Grokking on a + b mod 97: train fits early, test accuracy jumps much later",
         fontsize=12,
         color=INK,
         x=0.01,
@@ -233,7 +233,7 @@ def plot_probe(results: list[ProbeResult], groks: list[int | None], out: Path) -
     axes[2, 0].set_ylabel("variance share of top frequency", color=MUTED, fontsize=9)
     axes[1, 0].legend(frameon=False, fontsize=8, loc="center right")
     fig.suptitle(
-        "Regression probe of all 512 MLP neurons, fit on training pairs only",
+        "Regression probe of all hidden neurons in one layer, fit on training pairs only",
         fontsize=12,
         color=INK,
         x=0.01,
@@ -275,15 +275,15 @@ def plot_spectrum(r: ProbeResult, grok: int | None, out: Path) -> None:
 
 
 def plot_neuron_maps(
-    run_dir: Path, grok: int | None, out: Path, n_neurons: int = 4
+    run_dir: Path, grok: int | None, out: Path, layer: int = 0, n_neurons: int = 4
 ) -> None:
     """Activation of the most active neurons over (a, b) at a few steps, plus the final Fourier fit."""
     paths = sorted(run_dir.glob("step_*.pt"))
     final_model, ckpt = load_model(paths[-1])
     p = ckpt["p"]
     a, b = make_grid(p)
-    all_neurons = list(range(final_model.mlp[0].out_features))
-    final = record_neurons(final_model, all_neurons)
+    final = record_neurons(final_model, layer=layer)
+    all_neurons = list(range(final.shape[1]))
     final_fits = fit_neurons(final, a, b, p, "trig", 0, all_neurons)
     # The most active neuron for each of the first n distinct dominant frequencies.
     neurons, seen = [], set()
@@ -301,7 +301,7 @@ def plot_neuron_maps(
         min(by_step, key=lambda t: abs(t - s)) for s in wanted
     ]  # nearest checkpoint
     cols = [
-        (f"step {s:,}", record_neurons(load_model(by_step[s])[0], neurons))
+        (f"step {s:,}", record_neurons(load_model(by_step[s])[0], neurons, layer))
         for s in wanted
     ]
     X, _ = build_features(a, b, p, "trig", 0)
@@ -358,6 +358,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("runs", type=Path, nargs="+")
     parser.add_argument("--out", type=Path, default=Path("reports/figures/pilot"))
+    parser.add_argument("--layer", type=int, default=0, help="hidden layer to probe")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -365,11 +366,11 @@ def main() -> None:
     groks = [find_grok_step(h) for h in histories]
     seeds = [load_model(min(r.glob("step_*.pt")))[1]["seed"] for r in args.runs]
     plot_training_curves(histories, seeds, args.out / "training_curves.png")
-    results = [probe_run(r) for r in args.runs]
+    results = [probe_run(r, args.layer) for r in args.runs]
     (args.out / "probe.json").write_text(json.dumps(results))
     plot_probe(results, groks, args.out / "probe_r2.png")
     plot_spectrum(results[0], groks[0], args.out / "frequency_spectrum.png")
-    plot_neuron_maps(args.runs[0], groks[0], args.out / "neuron_maps.png")
+    plot_neuron_maps(args.runs[0], groks[0], args.out / "neuron_maps.png", args.layer)
     for seed, grok in zip(seeds, groks):
         print(f"seed {seed}: test acc >= {GROK_ACC:.0%} at step {grok}")
 

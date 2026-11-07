@@ -1,12 +1,12 @@
-"""Train a 1-layer transformer on modular arithmetic and save checkpoints along the way.
+"""Train a 1-layer transformer or an MLP on modular arithmetic, saving checkpoints along the way.
 
-Run: uv run python -m quickgrok.train --op add --steps 30000
+Run: uv run python -m quickgrok.train --model mlp --op add --steps 30000
 """
 
 import argparse
 import json
 from pathlib import Path
-from typing import TypedDict, get_args
+from typing import Literal, NotRequired, TypedDict, get_args
 
 import torch
 import torch.nn.functional as F
@@ -14,8 +14,14 @@ from torch import Tensor, nn
 
 from quickgrok.data import Example, Operation, make_dataset
 
+ModelName = Literal["transformer", "mlp"]
+
 
 class Checkpoint(TypedDict):
+    model: NotRequired[
+        ModelName
+    ]  # missing in pilot checkpoints, which are all "transformer"
+    n_hidden: NotRequired[int]  # MLP only
     p: int
     op: Operation
     train_frac: float
@@ -57,6 +63,44 @@ class GrokTransformer(nn.Module):
         return self.unembed(h[:, -1])
 
 
+class GrokMLP(nn.Module):
+    def __init__(self, p: int, d_hidden: int = 512, n_hidden: int = 1) -> None:
+        super().__init__()
+        # One-hot a and b straight into the first hidden layer: pre-activation U[a] + V[b] + bias.
+        self.embed_a = nn.Embedding(p, d_hidden)  # U
+        self.embed_b = nn.Embedding(p, d_hidden)  # V
+        self.bias = nn.Parameter(torch.zeros(d_hidden))
+        layers: list[nn.Module] = [nn.ReLU()]
+        for _ in range(n_hidden - 1):
+            layers += [nn.Linear(d_hidden, d_hidden), nn.ReLU()]
+        self.hidden = nn.Sequential(
+            *layers
+        )  # every ReLU here is a selectable neuron layer
+        self.unembed = nn.Linear(d_hidden, p)
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Map token sequences (N, 3) to logits (N, p); the "=" token is ignored."""
+        h = self.embed_a(x[:, 0]) + self.embed_b(x[:, 1]) + self.bias
+        return self.unembed(self.hidden(h))
+
+
+GrokModel = GrokTransformer | GrokMLP
+
+
+def build_model(name: ModelName, p: int, n_hidden: int = 1) -> GrokModel:
+    """Construct a fresh model by name; `n_hidden` only applies to the MLP."""
+    return (
+        GrokTransformer(p) if name == "transformer" else GrokMLP(p, n_hidden=n_hidden)
+    )
+
+
+def get_activation_layers(model: GrokModel) -> list[nn.Module]:
+    """The activation modules whose outputs count as neurons, ordered by depth."""
+    if isinstance(model, GrokTransformer):
+        return [model.mlp[1]]
+    return [m for m in model.hidden if isinstance(m, nn.ReLU)]
+
+
 def to_tensors(examples: list[Example], device: str) -> tuple[Tensor, Tensor]:
     """Stack examples into an input tensor (N, 3) and a target tensor (N,)."""
     x = torch.tensor([tokens for tokens, _ in examples], device=device)
@@ -72,15 +116,19 @@ def evaluate(model: nn.Module, x: Tensor, y: Tensor) -> tuple[float, float]:
         return loss, (logits.argmax(-1) == y).float().mean().item()
 
 
-def load_model(path: Path) -> tuple[GrokTransformer, Checkpoint]:
+def load_model(path: Path) -> tuple[GrokModel, Checkpoint]:
     """Load a checkpoint onto the CPU and return the model in eval mode and the checkpoint."""
     ckpt: Checkpoint = torch.load(path, map_location="cpu", weights_only=True)
-    model = GrokTransformer(ckpt["p"])
+    model = build_model(
+        ckpt.get("model", "transformer"), ckpt["p"], ckpt.get("n_hidden", 1)
+    )
     model.load_state_dict(ckpt["state_dict"])
     return model.eval(), ckpt
 
 
 def train(
+    model_name: ModelName,
+    n_hidden: int,
     p: int,
     op: Operation,
     train_frac: float,
@@ -104,7 +152,7 @@ def train(
     x_train, y_train = to_tensors(train_set, device)
     x_val, y_val = to_tensors(val_set, device)
 
-    model = GrokTransformer(p).to(device)
+    model = build_model(model_name, p, n_hidden).to(device)
     opt = torch.optim.AdamW(
         model.parameters(), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.98)
     )
@@ -132,6 +180,8 @@ def train(
                 f"  train_acc {train_acc:.3f}  val_acc {val_acc:.3f}"
             )
             ckpt: Checkpoint = {
+                "model": model_name,
+                "n_hidden": n_hidden,
                 "p": p,
                 "op": op,
                 "train_frac": train_frac,
@@ -152,6 +202,8 @@ def train(
 def main() -> None:
     """Parse CLI arguments and run training."""
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", choices=get_args(ModelName), default="transformer")
+    parser.add_argument("--n-hidden", type=int, default=1, help="MLP hidden layers")
     parser.add_argument("--p", type=int, default=97)
     parser.add_argument("--op", choices=get_args(Operation), default="add")
     parser.add_argument("--train-frac", type=float, default=0.3)
@@ -163,8 +215,10 @@ def main() -> None:
     parser.add_argument("--save-every", type=int, default=500)
     parser.add_argument("--out-dir", type=Path, default=None)
     args = parser.parse_args()
-    out_dir = args.out_dir or Path("runs") / f"p{args.p}_{args.op}"
+    out_dir = args.out_dir or Path("runs") / f"{args.model}_p{args.p}_{args.op}"
     train(
+        args.model,
+        args.n_hidden,
         args.p,
         args.op,
         args.train_frac,
