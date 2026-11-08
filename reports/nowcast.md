@@ -108,7 +108,7 @@ Vanilla's norm falls by ~0.0046 per step here. The jump removes ~1.4 at once, wh
   - The jump itself removes only ~1% of the norm. The rest comes from faster shrinking in the few hundred steps after each jump.
   - The **norm-only control**:
     - It gives each tensor the forecast's norm but keeps its direction. It is accepted every time and has no effect (18,400, p = 0.94).
-    - At step 1000 it shrinks the weights ~30%, and training undoes this by step ~3000. Afterwards the forecast's per-tensor norm is only ~0.5% below the current one, so the control barely moves anything.
+    - Its first jump at step 1000 shrinks the total L2 norm of the weights to 7.8–8.2% below plain (largest gap at step 1200, all 10 seeds; seed 0: 182.1 vs 198.1), and training undoes this by step ~3000 (gap < 0.5%). (Correction 2026-11-08: an earlier version said ~30%.) Afterwards the forecast's per-tensor norm is only ~0.5% below the current one, so the control barely moves anything.
     - Rescaling alone does not shortcut the decay; moving along the forecast direction does.
     - Caveat: this control is not norm-matched to what the linear arm eventually achieves. A "shrink by 2% per jump" control would be the stronger test, and I did not run it.
 - **Cost:**
