@@ -4,7 +4,8 @@ Each neuron is evaluated at the "=" position on all p*p inputs and fit by least 
 two bases:
   poly  monomials x^i y^j (i + j <= degree), with x, y = a, b rescaled to [-1, 1]
   trig  for every frequency k = 1..p//2: cos/sin(w a), cos/sin(w b) and their 4 pairwise
-        products, w = 2*pi*k/p (for even p the sin columns at k = p/2 are zero). This is a degree-2 polynomial in Fourier features; it contains
+        products, w = 2*pi*k/p (for even p the sin columns at k = p/2 are zero). This is a
+        degree-2 polynomial in Fourier features; it contains
         cos(w(a+b)) = cos(wa)cos(wb) - sin(wa)sin(wb), which grokked add/sub nets are known to use.
 On the full grid every trig column is orthogonal, so the explained variance splits exactly per k.
 
@@ -52,6 +53,7 @@ def record_activations(
     acts: list[Tensor] = []
 
     def keep(_m: torch.nn.Module, _i: tuple[Tensor, ...], out: Tensor) -> None:
+        """Forward hook: store this batch's activations (last position for a transformer)."""
         out = out[:, -1] if out.dim() == 3 else out  # transformer: (N, seq, d)
         acts.append(out if neurons is None else out[:, neurons])
 

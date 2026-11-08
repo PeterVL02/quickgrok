@@ -78,6 +78,7 @@ def run(
     store: dict[str, Tensor] = {}
 
     def hook(_mod: nn.Module, _inp: tuple[Tensor, ...], out: Tensor) -> Tensor:
+        """Forward hook: apply `edit` to the last position, store it, return the output."""
         if edit is not None:
             out = out.clone()
             out[:, -1] = edit(out[:, -1])
@@ -159,11 +160,13 @@ def main() -> None:
                 basis = vh[:k99]
 
                 def prune(o: Tensor, keep: Tensor = keep) -> Tensor:
+                    """Zero the lower-variance half of the neurons."""
                     return o * keep
 
                 def project(
                     o: Tensor, mu: Tensor = mu, basis: Tensor = basis
                 ) -> Tensor:
+                    """Project activations onto the top-k99 principal directions."""
                     c = o.double() - mu
                     return (mu + c @ basis.T @ basis).float()
 
