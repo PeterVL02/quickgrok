@@ -24,9 +24,9 @@ The rest of this page covers the setup, each method and why it did or didn't hol
 
 **Grokking.** The network gets every training pair right by step ~200 and stays near 0% on the test set for thousands of steps. It passes 99% test accuracy at step 18,400 (median of 10 seeds, IQR 17,900–18,700).
 
-**Metric.** Steps until test accuracy ≥ 99%, median over 10 seeds, compared with a Mann–Whitney test. Every speed-up quoted below has p ≈ 2e-4 unless stated otherwise; with 10 runs against 10, that is the smallest p the test can give, meaning every run of one arm beat every run of the other.
+**Metric.** Steps until test accuracy ≥ 99%, median over 10 seeds, compared with a Mann–Whitney test. Every 10-seed speed-up quoted below has p ≈ 2e-4 unless stated otherwise; with 10 runs against 10, that is the smallest p the test can give, meaning every run of one arm beat every run of the other.
 
-**Scope.** Everything below is one task family (small algorithmic tasks), one MLP width and a 99% cutoff for "generalised". I tried about ten variants of methods, shapes and monitors; the ones discussed here are the ones that say something.
+**Scope.** Everything below is one task family (small algorithmic tasks), one MLP width and a 99% cutoff for "generalised". I tried more than a dozen variants of methods, shapes and monitors; the ones discussed here are the ones that say something.
 
 **What the network learns.** Grokked networks on this task are known to work with waves (Nanda et al. 2023). Write each number as a point on a circle and addition becomes rotation: products of cos and sin of a and b give cos and sin of a + b. In this MLP each neuron ends up as a square wave in k·x mod 97 for some frequency k:
 
@@ -36,22 +36,22 @@ This structure can be measured **from the training data alone, long before test 
 
 ## Results at a glance
 
-Steps to 99% test accuracy (median of 10 seeds; 5 for the fastest setting), and wall-clock time to reach it relative to plain training at the same setting (lower is better; absolute seconds in brackets).
+Steps to 99% test accuracy (median of 10 seeds; 5 seeds for the lr ×2 row and the fastest setting, where p ≈ 0.01), and wall-clock time to reach it relative to plain training at the same setting (lower is better; absolute seconds in brackets).
 
 | Method | Untuned (lr 1e-3, wd 1) | Tuned (lr 4e-3, wd 2) | Wall-clock, tuned | Fastest (lr 1.6e-2, wd 2) | Wall-clock, fastest | Verdict |
 | --- | --- | --- | --- | --- | --- | --- |
 | Plain training | 18,400 | 2,920 | ×1.00 (2.1 s) | 920 | ×1.00 (0.7 s) | — |
-| Plain training, lr ×2 | 8,700 (−53%) | — | — | — | — | the cheapest speed-up |
+| Plain training, lr ×2 | 8,700 (−51% vs 17,900 on the same seeds) | — | — | — | — | the cheapest speed-up |
 | Wave modules | 10,800 (−41%) | 1,620 (−45%) | ×1.53 (3.2 s) | 700 (−24%) | ×3.5 (2.5 s) | saves steps, mostly a prior; slower in time |
 | Wave modules, wrong frequency | 12,350 (−33%) | 2,030 (−30%) | ×1.90 (4.0 s) | — | — | the control |
 | Nowcasting | 11,150 (−39%) | 1,840 (−37%) | **×0.80 (1.7 s)** | 820 (−11%) | ×1.04 (0.7 s) | the only method that saves time, and only at moderate lr |
 | Both | — | 1,420 (−51%) | ×1.50 (3.1 s) | — | — | combine sub-additively |
-| Task-blind replacement shapes | stall at 94–96% test | — | — | — | — | failed |
+| Task-blind replacement shapes | never trigger, stall at 94–96%, or grok late | — | — | — | — | failed |
 | Training-data monitors as forecasters | — | — | — | — | — | failed the pre-registered test |
 
-**Why lr 4e-3, wd 2 is "the tuned baseline" and not the fastest setting.** It was chosen before the re-test as a strongly tuned setting that still has a clear plateau (memorised by ~80 steps, generalised ~35× later). The fastest setting has only an ~11× delay, so there is little plateau left to shorten; it was run as a secondary check on 5 seeds.
+**Why lr 4e-3, wd 2 is "the tuned baseline" and not the fastest setting.** It was chosen before the re-test as a strongly tuned setting that still has a clear plateau (memorised by ~80 steps, generalised ~36× later). The fastest setting has only an ~11× delay, so there is little plateau left to shorten; it was run as a secondary check on 5 seeds.
 
-**On the wall-clock numbers.** This model is tiny (0.74 ms per step), so whole runs take seconds, and the GPU's run-to-run variation is around 10%. Treat ratios within about 10% of 1 as "no difference". The ×0.80 for nowcasting is a saving of 0.4 s per run.
+**On the wall-clock numbers.** This model is tiny (0.74 ms per step), so whole runs take seconds and timings are noisy (three seeds of one wave-module variant took 3.2, 5.6 and 3.6 s). Read the ratios as rough, and ratios near 1 as "no difference". The ×0.80 for nowcasting is a saving of 0.4 s per run.
 
 ## The baseline was the biggest effect
 
@@ -59,12 +59,12 @@ The first round of experiments used lr 1e-3 and weight decay 1, taken over from 
 
 ![Grokking step against lr·wd for the plain MLP, with the two methods at the untuned setting as dotted lines](intuition/figures/baseline_lesson.png)
 
-- Grokking time falls from 17,900 steps to about 1,000 (up to 18×). It is still grokking: every setting memorises within 100–200 steps and generalises 10–40× later.
+- Grokking time falls from 17,900 steps to about 1,000 (up to 18×). It is still grokking: every setting memorises within 100–200 steps and generalises 10–90× later.
 - It falls roughly like 1 / (lr · wd), but the product is only a rough guide. The learning rate dominates: at equal lr · wd, lr 8e-3 / wd 0.5 groks in 3,500 steps and lr 2e-3 / wd 2 in 9,200. At lr 1e-3, raising wd from 1 to 2 made grokking slightly slower. Weight decay 4 stopped most seeds from grokking within 40,000 steps.
 - **Why it works:** AdamW shrinks every weight by a fraction lr · wd per step, and grokking here coincides with the weight norm falling to a particular value (about 124). Faster shrinking gets there sooner.
-- **This is known.** The dependence of grokking time on lr and wd is in the literature (Pracher et al. 2026 derive and measure the 1 / (lr · wd) scaling on this task), and the "weights must shrink into the right range" picture is Omnigrok's (Liu et al. 2023). A literature search before the first comparison would have caught it.
+- **This is known.** The dependence of grokking time on lr and wd is in the literature (Pracher et al. 2026 predict that the product lr · wd sets the grokking timescale and confirm the 1 / (lr · wd) scaling on modular addition), and the "weights must shrink into the right range" picture is Omnigrok's (Liu et al. 2023). A literature search before the first comparison would have caught it.
 
-Both methods were then re-tuned on 5 separate seeds and re-tested on 10 new seeds at lr 4e-3, wd 2. The numbers in the table come from that re-test.
+Both methods were then re-tuned at lr 4e-3, wd 2 on separate tuning seeds (100–104) and re-tested on seeds 0–9, the same seeds as the untuned comparison. The numbers in the table come from that re-test.
 
 ## Wave modules (fit and substitute)
 
@@ -87,7 +87,7 @@ So most of the gain is a strong prior: the module tells the network that neurons
 
 ## Nowcasting (extrapolate the weights and jump)
 
-**What.** Snapshot all weights every 100 steps. Every 1,000 steps, fit a straight line through each weight's last 8 snapshots and move the weight to where the line will be 1,000 steps from now. If the training loss after the jump is more than 1.5× the loss before, undo it. About 70% of jumps were kept. It needs no knowledge of the task.
+**What.** Snapshot all weights every 100 steps. Every 1,000 steps, fit a straight line through each weight's last 8 snapshots and move the weight to where the line will be 1,000 steps from now. If the training loss after the jump is more than 1.5× the loss before, undo it. About 70% of jumps were kept at the untuned setting. It needs no knowledge of the task.
 
 ![Linear extrapolation of a weight's trajectory and the jump it makes](intuition/figures/nowcast_idea.png)
 
@@ -98,11 +98,11 @@ So most of the gain is a strong prior: the module tells the network that neurons
 **Side results.**
 
 - A better forecaster is not a better accelerator. An online LSTM forecast the weights about twice as accurately as the straight line and grokked no sooner (11,350 vs 11,150 steps, p = 0.14).
-- Direction matters, not only size. Rescaling each weight tensor to the forecast's norm but keeping its direction gave 0%.
+- Direction matters, not only size. Rescaling each weight tensor to the forecast's norm but keeping its direction gave 0% (though this control shrinks the weights less than the linear arm eventually does, so it is not a perfect match).
 
 ## Task-blind replacement shapes
 
-Wave modules only work because I knew the answer is built from waves. To test the method without that knowledge, I replaced the Fourier fit with shapes that know nothing about the task, on a + b and on two tasks where clock waves are the wrong shape (a · b mod 97 and composing permutations of 5 items, S5). All failed:
+Wave modules only work because I knew the answer is built from waves. To test the method without that knowledge, I replaced the Fourier fit with shapes that know nothing about the task, on a + b and on two tasks where clock waves are the wrong shape (a · b mod 97 and composing permutations of 5 items, S5). These were single-seed looks, not 10-seed measurements. All failed:
 
 - **Global SVD** (the directions shared by all neurons) never triggered: the neurons use about 44 different frequencies, so the layer has no small shared subspace (the top 8 of 96 directions hold 12% of the energy).
 - **k-means levels** (each weight column takes 2–3 values) "light up" on every task within a few thousand steps, a + b included. That is an optimizer artefact (likely AdamW's sign-like updates), not task structure. Freezing neurons onto these levels stalls test accuracy at 94.8% (add) and 96.0% (mul).
@@ -116,8 +116,8 @@ After the re-test the speed-ups looked small next to tuning. What remained was t
 
 - **Two monitors** (training data only, checked every 50 steps): the **wave detector** from the setup section (M1 in the reports), and a **task-blind "self-expression" score** that measures how well each neuron can be written as a mix of a few others (M2). Each "fires" when its signal crosses a threshold; the step at which it fires, scaled by a ratio learned on calibration runs, is its forecast of the grok step.
 - **Five cheap baselines:** the lr · wd rule (B1); the typical grok step of earlier runs (B2); the step at which the total **weight norm** falls to the value where earlier runs grokked (B3); a Fourier transform of the weights that uses no data at all (B4); and the "excluded loss" from Nanda et al. 2023 (B5).
-- **Arms:** four that should grok (a + b untuned and tuned, a · b tuned, S5 tuned) and three controls that should not (weight decay 0, 10% training data, random labels). Thresholds and ratios were calibrated on seeds 0–9 of the grokking arms; seeds 10–19 were the test.
-- **Pass:** at most 1/10 false alarms per control, enough lead time, and a lower forecast error than *every* baseline on every grokking arm.
+- **Arms:** four that should grok (a + b untuned and tuned, a · b tuned, S5 tuned) and three controls that should not (weight decay 0, 10% training data, random labels). The monitors' thresholds were fixed in the pre-registration; the forecast ratios and the weight-norm threshold were calibrated on seeds 0–9 of the grokking arms, and seeds 10–19 were the test.
+- **Pass:** at most 1/10 false alarms per control, enough lead time, a lower forecast error than *every* baseline on every grokking arm, and for self-expression a rank correlation with test accuracy above the weight norm's.
 - **Decision rule:** if neither monitor passes, write this post and stop.
 
 ![Forecast error per test seed for the two monitors and five baselines on each grokking arm](reports/figures/monitor_killtest/forecast_error.png)
@@ -143,10 +143,10 @@ Forecast error is the average of |ln(forecast / actual grok step)| over test see
 ## What survives
 
 1. **The negative results**, which are the main output: the fit-and-substitute speed-up is mostly a prior, task-blind shapes don't replace it, and training-data monitors don't beat the weight norm at forecasting.
-2. **A unifying reading, for this setup:** grokking time tracks the weight norm. Plain and nowcast runs generalise at the same norm (about 124); tuning lr · wd and nowcasting both get there sooner, and the weight norm is the best forecaster of when it happens. Wave modules are a separate lever: they inject part of the answer. The value 124 comes from one width, one initialisation and one task, so take the mechanism, not the number.
+2. **A unifying reading, for this setup:** grokking time tracks the weight norm. Plain and nowcast runs generalise at the same norm (about 124 at the untuned setting, 119 at the tuned one); tuning lr · wd and nowcasting both get there sooner, and the weight norm is the best forecaster of when it happens. Wave modules are a separate lever: they inject part of the answer. These values come from one width, one initialisation and one task, so take the mechanism, not the number.
 3. **Nowcasting as a cheap step saver, at moderate learning rates.** It is task-agnostic and nearly free. Its gain fades as the baseline gets faster, because faster weight decay already does the shrinking it skips.
 4. **Constrain, don't snap.** If you do inject structure into weights during training, a parametrisation that keeps it holds; a one-off projection is undone.
-5. **A lead, not a result:** monitors that tell grokking from non-grokking runs early. They passed the easy controls but fired on every near-miss S5 run, and a data-free weight transform did as well.
+5. **A lead, not a result:** monitors that tell grokking from non-grokking runs early. They passed the easy controls, but the self-expression monitor fired on every near-miss S5 run, and a data-free weight transform did as well.
 
 ## Open questions and what to try next
 
