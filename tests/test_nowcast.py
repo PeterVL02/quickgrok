@@ -1,4 +1,4 @@
-"""Check the nowcast forecasters, jump verification and the Grokfast hook."""
+"""Check the nowcast forecasters and jump verification."""
 
 import json
 import tempfile
@@ -12,7 +12,6 @@ from quickgrok.accel import SubstitutionHook
 from quickgrok.data import make_dataset
 from quickgrok.models import GrokMLP
 from quickgrok.nowcast import (
-    GrokfastHook,
     LinearForecaster,
     LSTMForecaster,
     NowcastHook,
@@ -123,17 +122,3 @@ def test_composes_with_module_substitution() -> None:
         records = [json.loads(line) for line in hook.out_path.read_text().splitlines()]
     assert [r["step"] for r in records] == [4, 8] and records[1]["accepted"]
     assert torch.allclose(model.unembed.weight, before + 0.01 * 4, atol=1e-5)
-
-
-def test_grokfast_lambda_zero() -> None:
-    """Grokfast with lambda 0 leaves gradients unchanged."""
-    torch.manual_seed(0)
-    model = GrokMLP(97, d_hidden=16)
-    hook = GrokfastHook(alpha=0.98, lamb=0.0)
-    x = torch.randint(0, 97, (64, 3))
-    for step in range(3):
-        model.zero_grad()
-        F.cross_entropy(model(x), x[:, 0]).backward()
-        grads = [p.grad.clone() for p in model.parameters()]
-        hook.after_backward(step, model)
-        assert all(torch.equal(g, p.grad) for g, p in zip(grads, model.parameters()))

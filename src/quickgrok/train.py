@@ -38,7 +38,7 @@ from quickgrok.models import (  # noqa: F401  (re-exported for `from quickgrok.t
     load_model,
 )
 from quickgrok.monitor import MonitorHook
-from quickgrok.nowcast import ForecasterName, GrokfastHook, NowcastHook
+from quickgrok.nowcast import ForecasterName, NowcastHook
 
 GROK_ACC = 0.99  # test accuracy that counts as grokked
 
@@ -120,8 +120,6 @@ def train(
     nowcast_k: int = 8,
     nowcast_max_loss_ratio: float = 1.5,
     nowcast_norm_only: bool = False,
-    grokfast_lambda: float = 0.0,
-    grokfast_alpha: float = 0.98,
     nowcast_snapshot_every: int = 100,
     monitor_every: int = 0,
     random_labels: bool = False,
@@ -135,7 +133,7 @@ def train(
     `out_dir/substitutions.jsonl` (see `SubstitutionHook` for `random_k`, `sub_all_at`, `basis`
     and `tau_energy`).
     `nowcast` other than "none" adds a `NowcastHook` writing `out_dir/nowcast.jsonl` (snapshots
-    every `nowcast_snapshot_every` steps); `grokfast_lambda > 0` adds a `GrokfastHook`.
+    every `nowcast_snapshot_every` steps).
     `monitor_every > 0` adds a `MonitorHook` writing `out_dir/monitor.jsonl`. `random_labels`
     permutes the training targets (seeded).
     Checkpoints and `weight_norm` use the effective weights. With `stop_after_grok`, training
@@ -183,8 +181,6 @@ def train(
         )
     elif probe_every:
         hooks.append(ProbeHook(*probe_args))
-    if grokfast_lambda:
-        hooks.append(GrokfastHook(grokfast_alpha, grokfast_lambda))
     if nowcast != "none":
         hooks.append(
             NowcastHook(
@@ -344,8 +340,6 @@ def main() -> None:
         action="store_true",
         help="control: rescale each tensor to its forecast's norm, keep its direction",
     )
-    parser.add_argument("--grokfast-lambda", type=float, default=0.0, help="0 = off")
-    parser.add_argument("--grokfast-alpha", type=float, default=0.98)
     parser.add_argument(
         "--monitor-every",
         type=int,
@@ -397,8 +391,6 @@ def main() -> None:
         args.nowcast_k,
         args.nowcast_max_loss_ratio,
         args.nowcast_norm_only,
-        args.grokfast_lambda,
-        args.grokfast_alpha,
         args.nowcast_snapshot_every,
         args.monitor_every,
         args.random_labels,
