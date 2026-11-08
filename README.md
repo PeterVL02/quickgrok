@@ -167,7 +167,7 @@ uv run pytest
 - `experiments/`: one file per report. `uv run python experiments/<name>.py run` launches its training runs (`--dry-run` prints the commands), `figures` remakes the report's figures and tables, and `summary.py figures` draws the figure at the top of this post.
 - `reports/`: one report per experiment, with its figures; [`reports/README.md`](reports/README.md) is the index.
 - `intuition/`: a picture-first walkthrough of the project.
-- [`docs/usage.md`](docs/usage.md): the command-line flags and the hook API.
+- Training flags: `uv run python -m quickgrok.train --help`.
 
 Training runs are not stored in the repo; see the "Raw data" note in `reports/README.md`.
 
