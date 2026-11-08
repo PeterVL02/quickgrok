@@ -105,7 +105,7 @@ The common failure: freezing a neuron onto a shape that is still changing blocks
 
 ## Can training-data signals forecast grokking? A pre-registered test
 
-After the re-test the speed-ups looked small next to tuning. What remained was the early structure: if it shows up long before test accuracy moves, can it **forecast** grokking? An LLM-council review (see the disclosure below) proposed a kill test, and I wrote down and committed the monitors, baselines, pass criteria and decision before running anything ([pre-registration](reports/preregistration_monitor.md)).
+After the re-test the speed-ups looked small next to tuning. What remained was the early structure: if it shows up long before test accuracy moves, can it **forecast** grokking? Before running anything, I wrote down and committed the monitors, baselines, pass criteria and decision ([pre-registration](reports/preregistration_monitor.md)).
 
 - **Monitors** (training data only, every 50 steps): the Fourier trigger (M1) and a task-blind self-expression score (M2).
 - **Cheap baselines:** the lr · wd rule (B1), the median grok step of calibration runs (B2), the step at which the weight norm reaches the value where calibration runs grokked (B3), a data-free Fourier transform of the weights (B4), and Nanda et al.'s excluded loss (B5).
