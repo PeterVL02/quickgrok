@@ -31,3 +31,7 @@ Status (2026-11-08): **project concluded.** A pre-registered test failed, so per
 - **Constraining beats snapping:** neurons projected once drift back.
 - **Steps are not seconds:** probing and parametrising can cost more time than the steps they save.
 - **Pre-register kill tests, and check that every arm behaves as assumed before freezing it.** S5 at the tuned settings never grokked.
+
+## Raw data
+
+Training runs (`runs/`, metrics and checkpoints) are gitignored and not kept in the repo; the committed figures and tables are the record. Each report lists the commands that regenerate its runs and figures. As of 2026-11-08 the raw runs behind `nowcast.md`, `tuned_baseline.md` and `tuned_retest.md` no longer exist, so their figures can only be remade by re-running (MLP runs, a few seconds to minutes each on one GPU). The kill-test runs (`monitor_killtest.md`) were kept, and `scripts/eval_monitor_killtest.py` reproduces its tables exactly.

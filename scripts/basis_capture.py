@@ -1,6 +1,6 @@
 """How much of each input column does each candidate basis capture, over training? (G1b)
 
-Offline, CPU only. For every checkpoint of the vanilla MLP runs of add, mul and s5, and every
+Report: reports/generic_basis.md. Offline, CPU only. For every checkpoint of the vanilla MLP runs of add, mul and s5, and every
 input column (u_i and v_i separately, mean removed), the captured share of its energy by:
   fourier     harmonics of the column's best base frequency, 8 directions (knows cyclicity)
   svd_global  the 8 left singular vectors of the mean-removed [U, V] that capture it most

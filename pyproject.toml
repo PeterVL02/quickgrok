@@ -1,8 +1,9 @@
 [project]
 name = "quickgrok"
 version = "0.1.0"
-description = "Add your description here"
+description = "Grokking on modular arithmetic: fitting and substituting hidden neurons during training"
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "PeterVL02", email = "p.vesterenglarsen@gmail.com" }
 ]
