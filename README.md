@@ -22,3 +22,7 @@ The project is concluded. A pre-registered kill test failed, so what remains is 
 - **Swapping neurons for trainable wave modules speeds grokking,** but mostly because waves are the right prior for this task. Task-blind replacement shapes stall generalisation.
 - **A tuned learning rate and weight decay shrink the plateau far more than any method** (up to ~18×; this is known in the literature). On a tuned baseline, step savings remain (nowcasting 37%, wave modules 45%), but they shrink at the fastest settings, and only nowcasting saves wall-clock time.
 - **Train-only monitors don't forecast *when* grokking happens better than cheap baselines.** They do flag *whether* a run will grok, with no false alarms on non-grokking controls.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
