@@ -38,13 +38,20 @@ uv run python -m quickgrok.plot_compare --arm vanilla runs/vanilla/seed0 \
 | Flag | Meaning |
 | --- | --- |
 | `--model mlp\|transformer` | One-hidden-layer MLP on one-hot (a, b), or a 1-layer transformer |
-| `--op add\|sub\|mul\|div`, `--p`, `--train-frac` | Task: a op b mod p, fraction of all pairs used for training |
+| `--op add\|sub\|mul\|div\|s5`, `--p`, `--train-frac` | Task: a op b mod p (or composition in S5, which fixes p = 120), fraction of all pairs used for training |
 | `--steps`, `--lr`, `--weight-decay`, `--seed` | Full-batch AdamW training |
 | `--probe-every N` | Fit all hidden neurons every N steps (training inputs only) |
 | `--substitute none\|project\|module` | Swap triggered neurons: snap weights once, or constrain them to a trainable wave module |
 | `--tau-share`, `--tau-r2` | Trigger thresholds (fraction of variance in one frequency and its harmonics; R² on held-out training rows) |
+| `--basis probe\|fourier\|poly\|svd\|random\|auto\|levels_2\|levels_3\|self_expr`, `--tau-energy` | Substitution basis: `probe` uses the activation fit's frequency; the others are chosen from the weights and trigger on captured energy ≥ `--tau-energy` |
 | `--random-k`, `--sub-all-at N` | Controls: wrong frequency; swap every neuron at step N |
+| `--nowcast linear\|lstm`, `--nowcast-every`, `--nowcast-horizon`, `--nowcast-snapshot-every`, `--nowcast-k` | Forecast every weight `--nowcast-horizon` steps ahead from the run's own snapshots and jump there every `--nowcast-every` steps; revert if train loss rises more than `--nowcast-max-loss-ratio` |
+| `--grokfast-lambda`, `--grokfast-alpha` | Grokfast-EMA gradient filter (baseline; 0 = off) |
+| `--monitor-every N` | Log the train-only grokking monitors every N steps (MLP only) |
+| `--random-labels` | Control: a fixed seeded permutation of the training targets |
 | `--stop-after-grok N` | Stop N steps after test accuracy first reaches 99% |
+
+Other entry points: `uv run python -m quickgrok.plot_nowcast` (nowcast diagnostics per arm), `uv run python -m quickgrok.regress` (fit neurons of saved checkpoints), and the one-off analyses in `scripts/` (each lists its command in its docstring).
 
 ## What a run writes
 
@@ -56,6 +63,8 @@ Every run directory (`--out-dir`) contains:
 | `step_XXXXXX.pt` | Checkpoint every `--save-every` steps (load with `quickgrok.models.load_model`) |
 | `probe.jsonl` | One line per probe: each neuron's frequency, harmonic share and held-out R² |
 | `substitutions.jsonl` | One line per swap event: step, neurons, frequencies, train loss before/after |
+| `nowcast.jsonl` | With `--nowcast`: one line per jump attempt, accepted or reverted |
+| `monitor.jsonl` | With `--monitor-every`: one `MonitorRecord` of train-only monitors per log step |
 
 ## Python API
 
@@ -65,7 +74,9 @@ Every run directory (`--out-dir`) contains:
 | `quickgrok.models` | `build_model("mlp" \| "transformer", p)`, `GrokMLP`, `GrokTransformer`, `load_model(path) -> (model, checkpoint)`, `get_activation_layers(model)` |
 | `quickgrok.regress` | `record_neurons(model, neurons=None, layer=0)` (activations on all p² inputs), `record_activations(model, x, layer)`, `fit_neurons(...)` (least-squares fits on Fourier or polynomial features) |
 | `quickgrok.accel` | `Hook`, `Accelerator`, `ProbeHook`, `SubstitutionHook`, `effective_state_dict(model)` |
-| `quickgrok.plot_compare`, `quickgrok.plot_pilot` | Figures; mostly used from the command line |
+| `quickgrok.nowcast` | `NowcastHook`, `GrokfastHook`, `LinearForecaster`, `LSTMForecaster` |
+| `quickgrok.monitor` | `MonitorHook` (train-only grokking monitors, `GrokMLP` only) |
+| `quickgrok.plot_compare`, `quickgrok.plot_pilot`, `quickgrok.plot_nowcast` | Figures; mostly used from the command line |
 
 ### Hooks in your own training loop
 
@@ -87,12 +98,21 @@ x = torch.tensor([tokens for tokens, _ in train_set], device=device)
 y = torch.tensor([c for _, c in train_set], device=device)
 
 model = build_model("mlp", p).to(device)
-opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1.0, betas=(0.9, 0.98))
+opt = torch.optim.AdamW(
+    model.parameters(), lr=1e-3, weight_decay=1.0, betas=(0.9, 0.98)
+)
 out = Path("runs/my_loop")
 out.mkdir(parents=True, exist_ok=True)
 hook = SubstitutionHook(
-    x, p, out / "probe.jsonl", every=500,
-    mode="module", tau_share=0.5, tau_r2=0.8, y_train=y, log_path=out / "substitutions.jsonl",
+    x,
+    p,
+    out / "probe.jsonl",
+    every=500,
+    mode="module",
+    tau_share=0.5,
+    tau_r2=0.8,
+    y_train=y,
+    log_path=out / "substitutions.jsonl",
 )
 accel = Accelerator(model, [hook])
 
@@ -132,5 +152,5 @@ class WarmBoost(Hook):
 
 - **Compare over seeds, not single runs.** GPU training is not bit-for-bit reproducible; the same seed can grok ~10% earlier or later. The reports use 10 seeds and a Mann–Whitney test.
 - **No test data in the fits.** Probes and swaps only ever use training inputs (tested in `tests/test_accel.py`).
-- **Tests** are plain scripts: `uv run python tests/test_accel.py` (and the other files in `tests/`).
+- **Tests:** `uv run pytest`.
 - **Lint:** `uv run ruff check . && uv run ruff format .`
