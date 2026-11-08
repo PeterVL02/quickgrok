@@ -4,7 +4,7 @@
 
 ![Steps until 99% test accuracy for plain training, nowcasting, wave modules and both, at four learning-rate and weight-decay settings](reports/figures/blog/summary.png)
 
-**In short**
+## **In short**
 
 - I tried two ways to make a small network grok sooner on modular addition: replacing hidden neurons with trainable wave modules once they start to look like waves, and extrapolating the weights forward ("nowcasting"). Against the baseline I started with, they cut the steps to generalisation by 41% and 39%.
 - A control showed that most of the wave-module gain is a built-in prior, not a jump to where the network was heading: waves of the wrong frequency helped almost as much.
@@ -33,7 +33,7 @@ This structure can be measured **from the training data alone, long before test 
 ## Results at a glance
 
 | Method | Untuned baseline (lr 1e-3, wd 1) | Tuned baseline (lr 4e-3, wd 2) | Wall-clock, tuned | Verdict |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | Plain training | 18,400 steps | 2,920 steps | ×1.00 | — |
 | Plain training, lr ×2 | 8,700 (−53%) | — | — | the cheapest speed-up |
 | Wave modules | 10,800 (−41%) | 1,620 (−45%) | ×1.53 | works in steps, mostly a prior; slower in time |
@@ -89,9 +89,9 @@ So most of the gain is a strong prior: the module tells the network that neurons
 **Why it works.** The plateau is mostly weight decay slowly shrinking the weights. Plain and nowcast runs pass 99% test accuracy at the same weight norm (about 124); the jumps get there ~7,000 steps sooner at the untuned setting. That also explains why the gain shrinks as the baseline gets faster: the faster weight decay already does the shrinking, so there is less plateau to skip.
 
 **Side results.**
+
 - A better forecaster is not a better accelerator. An online LSTM forecast the weights about twice as accurately as the straight line and grokked no sooner (11,350 vs 11,150 steps, p = 0.14).
 - Direction matters, not only size. Rescaling each weight tensor to the forecast's norm but keeping its direction gave 0%.
-- Grokfast (an EMA gradient filter, λ 2) gave 0% in this setting.
 
 ## Task-blind replacement shapes
 
@@ -116,7 +116,7 @@ After the re-test the speed-ups looked small next to tuning. What remained was t
 ![Forecast error per test seed for the two monitors and five baselines on each grokking arm](reports/figures/monitor_killtest/forecast_error.png)
 
 | Forecast error (log-MAE, lower is better) | a + b untuned | a + b tuned | a · b tuned |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Fourier trigger (M1) | 0.062 | 0.057 | n/a |
 | Self-expression (M2) | 0.023 | 0.032 | 0.059 |
 | Weight norm (B3) | **0.016** | **0.029** | **0.044** |
@@ -141,7 +141,6 @@ Everything here used one-hidden-layer MLPs on small algorithmic tasks; the trans
 - **"Whether", not "when", as its own pre-registered question.** Can a training-data monitor flag runs that will never generalise, in settings where cheap baselines fail? That needs settings where grokking time varies a lot between seeds or configurations, unlike this one.
 - **Nowcasting elsewhere.** Transformers and deeper models, grokking on real data (Omnigrok-style MNIST with large initialisation, or QM9), and ordinary training without a plateau, always against a tuned learning rate. An adaptive horizon could keep the gain at high learning rates.
 - **Re-fitted instead of frozen shapes.** Every task-blind basis failed by freezing a moving target. Re-fitting the basis at every probe (or per-cluster SVD) is a cheap test.
-- **Why the fitted frequency still matters at step 0.** All-wave networks with fitted frequencies grok in 700 steps, with random ones in 1,450. What makes some frequencies better from the start?
 - **Lower trigger thresholds.** Tuning favoured the most permissive threshold, which points toward "substitute more, earlier", converging on the step-0 prior.
 
 ## Lessons for practitioners
@@ -155,7 +154,7 @@ Everything here used one-hidden-layer MLPs on small algorithmic tasks; the trans
 
 ## How this was made
 
-This project was done with Claude Code (Anthropic's AI coding assistant) as a research assistant. I chose the questions and the ideas to test, made the go/stop decisions and reviewed the results. Claude wrote most of the code, ran the experiments, produced the figures and drafted the reports and this text, which I edited. Two process steps came from AI tools: a "council" of five LLM advisors with peer review, which recommended the pre-registered kill test, and AI-run literature searches. Mistakes and conclusions are mine.
+This project was done with Claude Code as a research assistant. I chose the questions and the ideas to test, made the go/stop decisions and reviewed the results. Claude wrote most of the code, ran the experiments, produced the figures and drafted the reports and this text, which I edited. Claude Code was used for AI-run literature searches.
 
 ## Using this repository
 
