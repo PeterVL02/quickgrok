@@ -22,33 +22,10 @@
 - **`GrokfastHook`** (Grokfast-EMA, re-implemented from the paper's description): in `after_backward`, ema = α·ema + (1 − α)·grad, then grad += λ·ema, with the EMA starting at zero.
 - **Control `--nowcast-norm-only`** (added by me, not in the brief): the same linear forecast and verification, but each parameter tensor keeps its current direction and is only rescaled to the norm of its forecast. It tests whether the jump helps through its direction or only through shrinking the weights.
 
-```
-# common flags for every run
-uv run python -m quickgrok.train --model mlp --steps 40000 --stop-after-grok 3000 --save-every 5000 \
-    --seed $s --out-dir runs/nowcast/<arm>/seed$s  <arm flags>
-
-# tuning, seeds 100-104
-tune_linear_h1000:  --nowcast linear --nowcast-horizon 1000
-tune_linear_h3000:  --nowcast linear --nowcast-horizon 3000
-tune_lstm_h1000:    --nowcast lstm   --nowcast-horizon 1000
-tune_grokfast_l1:   --grokfast-lambda 1
-tune_grokfast_l2:   --grokfast-lambda 2
-# (--nowcast-every 1000, --nowcast-k 8, --nowcast-max-loss-ratio 1.5, --grokfast-alpha 0.98 are the defaults)
-
-# final, seeds 0-9 (shadow_lstm: seeds 0-4)
-linear:            --nowcast linear --nowcast-horizon 1000
-lstm:              --nowcast lstm   --nowcast-horizon 1000
-grokfast:          --grokfast-lambda 2 --grokfast-alpha 0.98
-linear_norm_only:  --nowcast linear --nowcast-horizon 1000 --nowcast-norm-only
-shadow_linear:     --nowcast linear --nowcast-horizon 1000 --nowcast-max-loss-ratio 0
-shadow_lstm:       --nowcast lstm   --nowcast-horizon 1000 --nowcast-max-loss-ratio 0
-
-uv run python -m quickgrok.plot_compare --arm vanilla <C:/Users/pvest/code/quickgrok/runs/t6/vanilla/seed0..9> \
-    --arm shadow_linear runs/nowcast/shadow_linear/seed* --arm linear runs/nowcast/linear/seed* \
-    --arm lstm runs/nowcast/lstm/seed* --arm linear_norm_only runs/nowcast/linear_norm_only/seed* \
-    --arm grokfast runs/nowcast/grokfast/seed* --out reports/figures/nowcast
-uv run python -m quickgrok.plot_nowcast <same arms, plus --arm shadow_lstm runs/nowcast/shadow_lstm/seed*> \
-    --out reports/figures/nowcast/nowcast.png
+```bash
+uv run python experiments/nowcast.py run       # tuning (seeds 100-104) and final arms (seeds 0-9)
+uv run python experiments/nowcast.py figures   # vanilla: runs/t6/vanilla from experiments/substitution.py
+# arms and flags: top of experiments/nowcast.py
 ```
 
 ## Tuning (seeds 100–104; pre-registered rule: lowest median steps to 99% test accuracy)

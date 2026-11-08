@@ -2,11 +2,9 @@
 
 **Setup.** `GrokMLP`: one-hot a and b feed one hidden layer of 512 ReLU neurons (pre-activation U[a] + V[b] + bias), then a linear readout to 97 logits. Task: a + b mod 97, 30% of pairs for training. Full-batch AdamW, lr 1e-3, wd 1.0, betas (0.9, 0.98), 40k steps, seeds 0–4. These are the pilot's settings, unchanged. Branch `feat/mlp-baseline`. 5 seeds ran in parallel in 1.5 min on the RTX 5080.
 
-```
-uv run python -m quickgrok.train --model mlp --steps 40000 --seed $s --out-dir runs/mlp_baseline/seed$s
-uv run python -m quickgrok.plot_compare --arm "MLP vanilla" runs/mlp_baseline/seed{0..4} \
-    --arm "transformer (pilot)" runs/pilot/seed{0..2} --out reports/figures/mlp_baseline
-uv run python -m quickgrok.plot_pilot runs/mlp_baseline/seed{0,1,2} --layer 0 --out reports/figures/mlp_baseline/probe
+```bash
+uv run python experiments/mlp_baseline.py run       # the 5 seeds and the single-seed regime runs below
+uv run python experiments/mlp_baseline.py figures   # also needs runs/pilot (experiments/pilot.py)
 ```
 
 ## Choosing the regime

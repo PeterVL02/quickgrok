@@ -10,11 +10,10 @@
 - `ProbeHook` runs every 500 steps (from step 0). It feeds **only the training inputs** to the model and splits the training rows 80% fit / 20% check (fixed seed). It fits all 512 hidden neurons by least squares on the trig basis (all frequencies, built once, pseudo-inverse precomputed), using the fit rows only.
 - Trigger per neuron: **harmonic share** ≥ τ_share AND **check-split R²** ≥ τ_r2. Harmonic share is the share of explained variance at the top frequency k* plus its harmonics 2k*, 3k*, 4k* (folded mod p). For an ideal 50%-duty square wave this caps at 0.90 with 4 harmonics.
 
-```
-uv run python -m quickgrok.train --model mlp --steps 40000 --seed $s --probe-every 500 \
-    --stop-after-grok 3000 --out-dir runs/accel_probe/seed$s          # s = 100..104, in parallel
-uv run python -m quickgrok.plot_compare --arm "MLP vanilla (probe)" runs/accel_probe/seed10{0..4} \
-    --out reports/figures/accel_probe
+```bash
+uv run python experiments/accel_probe.py run                     # seeds 100-104, in parallel
+uv run python experiments/accel_probe.py overhead --parallel 1   # the overhead timing below
+uv run python experiments/accel_probe.py figures
 ```
 
 The probe only reads activations. Grokking is unchanged: 99% test accuracy at **17,900 [17,500–18,200]** (seeds 100–104), versus 18,500 [18,200–18,700] for seeds 0–4 without the probe. All 5 runs took 70 s in parallel.

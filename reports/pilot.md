@@ -1,6 +1,6 @@
 # Pilot: grokking and a regression probe of MLP neurons (2026-11-07)
 
-**Setup.** 1-layer transformer (d_model 128, 4 heads, MLP 512 ReLU, no LayerNorm) on a + b mod 97, 30% of pairs for training. Full-batch AdamW (lr 1e-3, wd 1.0, betas 0.9/0.98), 35k steps, seeds 0–2. Branch `exp/pilot-probe`. Runs are in `runs/pilot/seed*/` (gitignored). Figures are made by `uv run python -m quickgrok.plot_pilot runs/pilot/seed0 runs/pilot/seed1 runs/pilot/seed2`.
+**Setup.** 1-layer transformer (d_model 128, 4 heads, MLP 512 ReLU, no LayerNorm) on a + b mod 97, 30% of pairs for training. Full-batch AdamW (lr 1e-3, wd 1.0, betas 0.9/0.98), 35k steps, seeds 0–2. Branch `exp/pilot-probe`. Runs are in `runs/pilot/seed*/` (gitignored). Runs and figures: `uv run python experiments/pilot.py run`, then `uv run python experiments/pilot.py figures`.
 
 ## Result 1: grokking reproduces, with a large seed spread
 
@@ -49,7 +49,7 @@ Four neurons with different dominant frequencies, with a and b reordered by k·x
 
 ![pca](figures/pilot/pca_rank.png)
 
-The question: could we periodically run PCA on hidden activations to prune idle neurons or filter noise? We ran PCA on the activations of the 512 MLP neurons on the **training pairs** at every checkpoint (`uv run python scripts/pca_probe_pilot.py`).
+The question: could we periodically run PCA on hidden activations to prune idle neurons or filter noise? We ran PCA on the activations of the 512 MLP neurons on the **training pairs** at every checkpoint (part of `uv run python experiments/pilot.py figures`).
 
 - **No idle neurons to prune.** About 130–150 neurons are dead at initialisation, but from step 500 on there are **zero** dead neurons and zero neurons below 1% of median variance, in every seed. Zeroing the 50% lowest-variance neurons cuts accuracy in every phase: test 0.27 → 0.14 on the plateau and 1.00 → ~0.56 after grokking.
 - **Compression is a rotation, not neurons switching off.** The number of principal components needed for 99% of variance falls from ~300 on the plateau to ~25 after grokking (participation ratio 30–35 → ~10). The low-dimensional structure is spread over all 512 neurons, which matches the Fourier picture: a few frequencies, each shared by many neurons.

@@ -5,9 +5,8 @@
 **Setup.** The vanilla `GrokMLP` on a + b mod 97 with 30% train and full-batch AdamW (betas 0.9/0.98), run on the tuning seeds 100–104. The grid is lr ∈ {1e-3, 2e-3, 4e-3, 8e-3, 1.6e-2} × wd ∈ {0.5, 1, 2, 4}, though not every pair was run; the table below lists the runs. Runs stop 3k steps after 99% test accuracy.
 
 ```bash
-uv run python -m quickgrok.train --model mlp --steps 40000 --stop-after-grok 3000 \
-    --lr $lr --weight-decay $wd --seed $s --out-dir runs/tuned_vanilla/lr${lr}_wd${wd}/seed$s
-uv run python scripts/plot_tuned_baseline.py
+uv run python experiments/tuned_baseline.py run       # the settings in the table below, seeds 100-104
+uv run python experiments/tuned_baseline.py figures
 ```
 
 ## Result
