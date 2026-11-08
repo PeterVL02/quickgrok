@@ -1,4 +1,4 @@
-"""Online weight nowcasting and a Grokfast-EMA baseline, as `Hook`s for `quickgrok.accel`.
+"""Online weight nowcasting as a `Hook` for `quickgrok.accel`.
 
 `NowcastHook` forecasts every weight `horizon` steps ahead from the run's own recent snapshots,
 jumps there, and reverts the jump if the full-batch train loss rises by more than
@@ -294,21 +294,3 @@ class NowcastHook(Hook):
         for s in [s for s in self.snaps if s < step - keep]:
             del self.snaps[s]
         return None
-
-
-class GrokfastHook(Hook):
-    """Grokfast-EMA: ema = alpha * ema + (1 - alpha) * grad, then grad += lamb * ema."""
-
-    def __init__(self, alpha: float = 0.98, lamb: float = 2.0) -> None:
-        self.alpha = alpha
-        self.lamb = lamb
-        self.ema: dict[nn.Parameter, Tensor] = {}
-
-    def after_backward(self, step: int, model: nn.Module) -> None:
-        """Update each gradient's EMA and add `lamb` times it to the gradient."""
-        for p in model.parameters():
-            if p.grad is None:
-                continue
-            ema = self.ema.setdefault(p, torch.zeros_like(p.grad))
-            ema.mul_(self.alpha).add_(p.grad, alpha=1 - self.alpha)
-            p.grad.add_(ema, alpha=self.lamb)
