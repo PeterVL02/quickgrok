@@ -23,6 +23,7 @@ Status (2026-11-08): **project concluded.** A pre-registered test failed, so per
 | [generic_basis.md](generic_basis.md) | Does the method work without knowing the inputs are cyclic (mul, S5)? | No. Global SVD never fires. k-means levels reflect an optimizer artefact present on every task. Self-expression stalls generalisation. |
 | [tuned_retest.md](tuned_retest.md) | Do the gains survive the tuned baseline? | In steps, yes: nowcast +37%, module +45%, both +51%. In wall-clock only nowcasting wins. Gains shrink at the fastest settings. |
 | [preregistration_monitor.md](preregistration_monitor.md) → [monitor_killtest.md](monitor_killtest.md) | Can a train-only monitor beat cheap baselines at predicting grokking? | Both monitors FAIL the forecast criterion. 0/30 false alarms on the (mostly easy) controls, but M2 fired on all 10 S5 runs, which never reached 99% (deviation: S5 never grokked at the tuned settings). Decision: blog post and stop. |
+| [preregistration_nowcast_transformer.md](preregistration_nowcast_transformer.md) → [nowcast_transformer.md](nowcast_transformer.md) | Does nowcasting save steps and wall-clock on the transformer, against a tuned lr (8e-3, wd 2)? | Null under the pre-registered rule: +22% fewer steps (p = 0.011) but only ×0.95 wall-clock (bar: ×0.90). |
 
 ## Lessons worth keeping
 

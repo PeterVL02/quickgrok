@@ -150,10 +150,10 @@ Forecast error is the average of |ln(forecast / actual grok step)| over test see
 
 ## Open questions and what to try next
 
-Everything here used one-hidden-layer MLPs on small algorithmic tasks; the transformer was only used in the pilot. Things I did not get to:
+Everything here used one-hidden-layer MLPs on small algorithmic tasks, apart from the pilot and one follow-up check on a 1-layer transformer. That check, pre-registered like the kill test, ran nowcasting against a tuned transformer (lr 8e-3, wd 2, ~830 steps to 99%): 22% fewer steps (p = 0.011), but each step costs ~12% more, so wall-clock was only ×0.95 (2.7 s vs 2.8 s) and missed the pre-set ×0.90 bar ([report](reports/nowcast_transformer.md)). Same picture as the MLP: the step saving holds, the time saving doesn't at short, fast runs. Things I did not get to:
 
 - **"Whether", not "when", as its own pre-registered question.** Can a monitor flag runs that will never generalise, in settings where cheap baselines fail? That first needs a definition of "generalised" that doesn't hinge on a 99% cutoff (the S5 near-misses), and settings where outcomes vary a lot between seeds, unlike this one.
-- **Nowcasting elsewhere.** Transformers and deeper models, grokking on real data (Omnigrok-style MNIST with large initialisation, or QM9), and ordinary training without a plateau, always against a tuned learning rate. An adaptive horizon could keep the gain at high learning rates.
+- **Nowcasting elsewhere.** Deeper models, grokking on real data (Omnigrok-style MNIST with large initialisation, or QM9), and ordinary training without a plateau, always against a tuned learning rate. An adaptive horizon could keep the gain at high learning rates.
 - **Re-fitted instead of frozen shapes.** Every task-blind basis failed by freezing a moving target. Re-fitting the basis at every probe (or per-cluster SVD) is a cheap test.
 - **Lower trigger thresholds.** Tuning favoured the most permissive threshold, which points toward "substitute more, earlier", converging on the step-0 prior.
 
