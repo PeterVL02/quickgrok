@@ -7,7 +7,7 @@
 ## Setup
 - 1-layer transformer (`--model transformer`: d_model 128, 4 heads, MLP 512, no LayerNorm), a + b mod 97, 30% train, full-batch AdamW (betas 0.9/0.98). Every run uses `--steps 20000 --eval-every 20`, so step counts have a 20-step resolution.
 - Nowcast: `NowcastHook`, linear forecaster, K = 8 snapshots, jumps reverted if the train loss rises more than 1.5×. It ran unchanged on the transformer; no code changes were needed.
-- Pre-registration: `reports/preregistration_nowcast_transformer.md`, committed (`b6f73a9`) before any tuning run. Its addendum with the tuning results and frozen choices was committed (`653ed43`) before the final runs.
+- Pre-registration: `reports/preregistration_nowcast_transformer.md`, committed (`e74c9ca`) before any tuning run. Its addendum with the tuning results and frozen choices was committed (`01c9564`) before the final runs.
 - **Kill rule:** "nowcasting helps on the transformer" only if the median step saving is ≥ 10% with Mann–Whitney p < 0.05 **and** the solo wall-clock ratio is ≤ 0.90.
 
 ```bash
