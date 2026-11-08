@@ -2,7 +2,7 @@
 
 **Question.** Plain and nowcast MLP runs pass 99% test accuracy at the same total weight norm (~124 at lr 1e-3, wd 1; `nowcast.md`). Does forcing the norm to that value make grokking happen sooner (the norm is a **lever**), or does the network still take about as long (the norm is a **readout**)? The earlier norm-only nowcast control could not tell: it shrank the norm by only ~8%, at norm ~200, and was undone by step 3,000.
 
-Pre-registered in [`preregistration_fix_norm.md`](preregistration_fix_norm.md) (commit fbf16a4, before any non-smoke run). Literature: [`literature_final.md`](literature_final.md). The closest prior work (Khanh et al. 2026, arXiv 2606.13753) reports that pinning at the free grok norm groks "on essentially the free-training timescale".
+Pre-registered in [`preregistration_fix_norm.md`](preregistration_fix_norm.md) (commit 1342e48, before any non-smoke run). Literature: [`literature_final.md`](literature_final.md). The closest prior work (Khanh et al. 2026, arXiv 2606.13753) reports that pinning at the free grok norm groks "on essentially the free-training timescale".
 
 ## Setup
 
