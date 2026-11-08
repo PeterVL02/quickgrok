@@ -472,8 +472,40 @@ def plot_substitutions(
     plt.close(fig)
 
 
+def compare(arms: dict[str, list[Path]], out: Path) -> None:
+    """Write the comparison figures and tables of `arms` (name -> run dirs) to `out`."""
+    out.mkdir(parents=True, exist_ok=True)
+    names = list(arms)
+    histories = [[load_history(d) for d in dirs] for dirs in arms.values()]
+    summaries = [summarise_arm(n, h) for n, h in zip(names, histories)]
+    plot_curves(names, histories, out / "curves.png")
+    plot_grok_steps(summaries, out / "grok_steps.png")
+    print(write_summary(summaries, out / "summary.md"))
+    if len(summaries) > 1:
+        print(write_stats(summaries, out / "stats.md"))
+
+    subbed = [
+        (arm, ARM_COLORS[i % len(ARM_COLORS)], dirs, s["grok99"])
+        for i, ((arm, dirs), s) in enumerate(zip(arms.items(), summaries))
+        if all((d / "substitutions.jsonl").exists() for d in dirs)
+    ]
+    if subbed:
+        s_arms, s_colors, s_dirs, s_groks = map(list, zip(*subbed))
+        plot_substitutions(s_arms, s_colors, s_dirs, s_groks, out / "substitutions.png")
+
+    probed = [
+        (arm, [load_probe(d) for d in dirs], s["grok99"], [d.name for d in dirs])
+        for (arm, dirs), s in zip(arms.items(), summaries)
+        if all((d / "probe.jsonl").exists() for d in dirs)
+    ]
+    if probed:
+        p_arms, p_runs, p_groks, p_names = map(list, zip(*probed))
+        plot_trigger(p_arms, p_runs, p_groks, out / "trigger.png")
+        print(write_lead_times(p_arms, p_runs, p_groks, p_names, out / "lead_time.md"))
+
+
 def main() -> None:
-    """Parse arms, make the comparison figures and print the summary table."""
+    """Parse arms from the command line, make the comparison figures and print the tables."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -487,46 +519,7 @@ def main() -> None:
     )
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    args.out.mkdir(parents=True, exist_ok=True)
-
-    arms = [a[0] for a in args.arm]
-    histories = [[load_history(Path(d)) for d in a[1:]] for a in args.arm]
-    summaries = [summarise_arm(n, h) for n, h in zip(arms, histories)]
-    plot_curves(arms, histories, args.out / "curves.png")
-    plot_grok_steps(summaries, args.out / "grok_steps.png")
-    print(write_summary(summaries, args.out / "summary.md"))
-    if len(summaries) > 1:
-        print(write_stats(summaries, args.out / "stats.md"))
-
-    subbed = [
-        (arm, ARM_COLORS[i % len(ARM_COLORS)], [Path(d) for d in a[1:]], s["grok99"])
-        for i, (arm, a, s) in enumerate(zip(arms, args.arm, summaries))
-        if all((Path(d) / "substitutions.jsonl").exists() for d in a[1:])
-    ]
-    if subbed:
-        s_arms, s_colors, s_dirs, s_groks = map(list, zip(*subbed))
-        plot_substitutions(
-            s_arms, s_colors, s_dirs, s_groks, args.out / "substitutions.png"
-        )
-
-    probed = [
-        (
-            arm,
-            [load_probe(Path(d)) for d in a[1:]],
-            s["grok99"],
-            [Path(d).name for d in a[1:]],
-        )
-        for arm, a, s in zip(arms, args.arm, summaries)
-        if all((Path(d) / "probe.jsonl").exists() for d in a[1:])
-    ]
-    if probed:
-        p_arms, p_runs, p_groks, p_names = map(list, zip(*probed))
-        plot_trigger(p_arms, p_runs, p_groks, args.out / "trigger.png")
-        print(
-            write_lead_times(
-                p_arms, p_runs, p_groks, p_names, args.out / "lead_time.md"
-            )
-        )
+    compare({name: [Path(d) for d in dirs] for name, *dirs in args.arm}, args.out)
 
 
 if __name__ == "__main__":

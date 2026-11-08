@@ -32,7 +32,8 @@ OMP_NUM_THREADS=2 uv run python -m quickgrok.train --model mlp --eval-every 20 -
 Ten processes ran in parallel on one RTX 5080, launched with `xargs -P 10`. The order was: a pre-flight with seed 100, then all calibration seeds (0–9), then all test seeds (10–19). The evaluation script was committed (4846fdf) after the calibration runs and before any test-seed output was read. It was first checked on calibration data copied in as stand-in test seeds.
 
 ```bash
-uv run python scripts/eval_monitor_killtest.py   # tables + figures -> reports/figures/monitor_killtest/
+uv run python experiments/monitor_killtest.py run       # every run above, pre-flight first
+uv run python experiments/monitor_killtest.py figures   # tables + figures -> reports/figures/monitor_killtest/
 ```
 
 **GPU time.** Wall-clock with 10 processes sharing the GPU: pre-flight 458 s (5 runs), calibration 1,372 s (40 runs), test 3,109 s (70 runs). **Total 4,939 s ≈ 82 min, inside the 90-minute budget.** Summed process time was 46,250 s. The runs are CPU-bound by the monitor: the GPU sat at about 50% utilisation.
@@ -51,12 +52,12 @@ uv run python scripts/eval_monitor_killtest.py   # tables + figures -> reports/f
 - **`--random-labels`** (`train.make_tensors`/`permute_labels`): the training targets are permuted with `torch.randperm`, seeded by the run seed. Test inputs and test labels are untouched.
 - **`MonitorHook`** (`src/quickgrok/monitor.py`, a `ProbeHook` subclass, `--monitor-every 50`). It writes one line to `monitor.jsonl` per probe, from the training rows only:
   - **M1:** `ProbeHook.probe` on hidden layer 0, with its 80/20 fit/check split of the training rows. The score is the fraction of all 512 neurons with harmonic share (4 harmonics) ≥ 0.5 and check R² ≥ 0.8. Dead neurons count as not passing. Computed on add tasks only.
-  - **M2:** for every column of U and of V (1,024 columns, mean removed), the capture by `self_expr_basis` (greedy OMP over q = 8 other columns of the same matrix) through `captured_energy`, exactly as `scripts/basis_capture.py` does. The Gaussian null is the median capture on Gaussian matrices of the same shape, computed once per run. The score is the median of (capture − null) / (1 − null).
+  - **M2:** for every column of U and of V (1,024 columns, mean removed), the capture by `self_expr_basis` (greedy OMP over q = 8 other columns of the same matrix) through `captured_energy`, exactly as the capture analysis in `experiments/generic_basis.py` does. The Gaussian null is the median capture on Gaussian matrices of the same shape, computed once per run. The score is the median of (capture − null) / (1 − null).
   - **B3:** the L2 norm of all effective parameters, computed with the same formula as `metrics.json`'s `weight_norm`.
   - **B4:** `make_basis("fourier", …)` with m = 9 (4 harmonics), then `captured_energy` of each neuron's (u, v) pair. The score is the fraction of neurons with energy ≥ 0.8. No data is used. Add only.
   - **B5:** see the Deviations section. Add only.
 - **Per-call cost** of the hook: 0.21 s on add (all five scores) and 0.12 s on s5 (M2 and norm) for a single process. In the actual runs, with 10 processes sharing the CPU, the median was 1.3–1.4 s per call. M2's OMP accounts for most of it. Over a typical 4,000-step G2 run that is 80 calls.
-- **`scripts/eval_monitor_killtest.py`** implements the firing rules, the calibration, the forecasts, log-MAE, the lead criterion, the false-alarm counts, the Spearman criterion and the verdict. The firing rule (`fire_step`) and `log_mae` live in `quickgrok.monitor` and are tested in `tests/test_monitor.py`, together with the random-label permutation and the excluded loss.
+- **`experiments/monitor_killtest.py`** (`figures`) implements the firing rules, the calibration, the forecasts, log-MAE, the lead criterion, the false-alarm counts, the Spearman criterion and the verdict. The firing rule (`fire_step`) and `log_mae` live in `quickgrok.monitor` and are tested in `tests/test_monitor.py`, together with the random-label permutation and the excluded loss.
 
 ## Results (step 3)
 

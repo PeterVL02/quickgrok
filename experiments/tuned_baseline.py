@@ -1,7 +1,9 @@
-"""Grokking step of the vanilla MLP versus learning rate x weight decay (AdamW's per-step decay).
+"""Tuned baseline: how grokking time of the vanilla MLP depends on learning rate and weight decay.
 
-Run: uv run python scripts/plot_tuned_baseline.py
-Reads runs/tuned_vanilla/lr<lr>_wd<wd>/seed<s>/metrics.json, writes reports/figures/tuned_baseline/.
+Report: reports/tuned_baseline.md.
+  uv run python experiments/tuned_baseline.py run       # 16 settings x 5 seeds = 80 runs
+  uv run python experiments/tuned_baseline.py figures   # -> reports/figures/tuned_baseline/
+The figure plots grok step against lr x weight decay (AdamW's per-step decay).
 """
 
 import json
@@ -13,12 +15,28 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from quickgrok.launch import main, make_jobs
 from quickgrok.plot_compare import ARM_COLORS
 from quickgrok.plot_pilot import INK, MUTED, find_grok_step, style_axes
 
-ROOT = Path(__file__).resolve().parent.parent
-RUNS = ROOT / "runs" / "tuned_vanilla"
-OUT = ROOT / "reports" / "figures" / "tuned_baseline"
+# Runs: runs/tuned_vanilla/lr<lr>_wd<wd>/seed<s>. Not every pair of the grid was run.
+COMMON = "--model mlp --steps 40000 --stop-after-grok 3000"
+SEEDS = [100, 101, 102, 103, 104]
+GRID = {  # weight decay -> learning rates
+    "0.5": ["4e-3", "8e-3", "1.6e-2"],
+    "1.0": ["1e-3", "2e-3", "4e-3", "8e-3", "1.6e-2"],
+    "2.0": ["1e-3", "2e-3", "4e-3", "8e-3", "1.6e-2"],
+    "4.0": ["1e-3", "2e-3", "4e-3"],
+}
+ARMS = {
+    f"lr{lr}_wd{wd}": f"--lr {lr} --weight-decay {wd}"
+    for wd, lrs in GRID.items()
+    for lr in lrs
+}
+JOBS = make_jobs("tuned_vanilla", ARMS, SEEDS, COMMON)
+
+RUNS = Path("runs/tuned_vanilla")
+OUT = Path("reports/figures/tuned_baseline")
 
 
 def parse_config(name: str) -> tuple[float, float]:
@@ -42,7 +60,7 @@ def collect() -> dict[float, list[tuple[float, int | None]]]:
     return {wd: sorted(rows) for wd, rows in sorted(table.items())}
 
 
-def main() -> None:
+def figures() -> None:
     """Plot grok step vs lr*wd per weight decay, with the 1/(lr*wd) reference line."""
     OUT.mkdir(parents=True, exist_ok=True)
     table = collect()
@@ -108,4 +126,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main({"run": JOBS}, {"figures": figures})

@@ -30,7 +30,7 @@ from quickgrok.models import GrokMLP
 
 M1_SHARE, M1_R2 = 0.5, 0.8
 B4_ENERGY = 0.8
-OMP_Q = 8  # other columns per self-expression fit, as in scripts/basis_capture.py
+OMP_Q = 8  # other columns per self-expression fit, as in experiments/generic_basis.py
 N_KEY_FREQS = 5
 N_HARMONICS = 4  # M1's harmonic share and B4's basis (1 + 2 * 4 columns)
 

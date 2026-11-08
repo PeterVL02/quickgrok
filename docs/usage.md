@@ -51,7 +51,7 @@ uv run python -m quickgrok.plot_compare --arm vanilla runs/vanilla/seed0 \
 | `--random-labels` | Control: a fixed seeded permutation of the training targets |
 | `--stop-after-grok N` | Stop N steps after test accuracy first reaches 99% |
 
-Other entry points: `uv run python -m quickgrok.plot_nowcast` (nowcast diagnostics per arm), `uv run python -m quickgrok.regress` (fit neurons of saved checkpoints), and the one-off analyses in `scripts/` (each lists its command in its docstring).
+Each report's runs and figures are reproduced by its file in `experiments/`: `uv run python experiments/<name>.py run [--dry-run]` and `uv run python experiments/<name>.py figures`.
 
 ## What a run writes
 
@@ -76,7 +76,8 @@ Every run directory (`--out-dir`) contains:
 | `quickgrok.accel` | `Hook`, `Accelerator`, `ProbeHook`, `SubstitutionHook`, `effective_state_dict(model)` |
 | `quickgrok.nowcast` | `NowcastHook`, `GrokfastHook`, `LinearForecaster`, `LSTMForecaster` |
 | `quickgrok.monitor` | `MonitorHook` (train-only grokking monitors, `GrokMLP` only) |
-| `quickgrok.plot_compare`, `quickgrok.plot_pilot`, `quickgrok.plot_nowcast` | Figures; mostly used from the command line |
+| `quickgrok.plot_compare`, `quickgrok.plot_pilot` | Figures shared by the experiments (`plot_compare` also has a command line) |
+| `quickgrok.launch` | The `run` / `figures` command line of the files in `experiments/` |
 
 ### Hooks in your own training loop
 

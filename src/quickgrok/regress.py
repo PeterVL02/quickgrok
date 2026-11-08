@@ -8,19 +8,15 @@ two bases:
         degree-2 polynomial in Fourier features; it contains
         cos(w(a+b)) = cos(wa)cos(wb) - sin(wa)sin(wb), which grokked add/sub nets are known to use.
 On the full grid every trig column is orthogonal, so the explained variance splits exactly per k.
-
-Run: uv run python -m quickgrok.regress runs/p97_add/step_*.pt --neurons 0 1 2 --basis trig
 """
 
-import argparse
 import math
-from pathlib import Path
-from typing import Literal, TypedDict, get_args
+from typing import Literal, TypedDict
 
 import torch
 from torch import Tensor
 
-from quickgrok.models import GrokModel, get_activation_layers, load_model
+from quickgrok.models import GrokModel, get_activation_layers
 
 Basis = Literal["poly", "trig"]
 
@@ -194,37 +190,3 @@ def fit_neurons(
             }
         )
     return fits
-
-
-def main() -> None:
-    """Parse CLI arguments and print a fit table per checkpoint."""
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    parser.add_argument("checkpoints", type=Path, nargs="+")
-    parser.add_argument("--neurons", type=int, nargs="+", required=True)
-    parser.add_argument("--basis", choices=get_args(Basis), default="trig")
-    parser.add_argument("--degree", type=int, default=6, help="poly basis only")
-    parser.add_argument("--layer", type=int, default=0, help="hidden layer index")
-    args = parser.parse_args()
-
-    for path in args.checkpoints:
-        model, ckpt = load_model(path)
-        p = ckpt["p"]
-        a, b = make_grid(p)
-        acts = record_neurons(model, args.neurons, args.layer)
-        fits = fit_neurons(acts, a, b, p, args.basis, args.degree, args.neurons)
-        print(
-            f"\n{path}  step {ckpt['step']}  train_acc {ckpt['train_acc']:.3f}  val_acc {ckpt['val_acc']:.3f}"
-        )
-        for f in fits:
-            extra = (
-                f"  top_freq {f['top_freq']} ({f['top_freq_share']:.0%})"
-                if f["top_freq"]
-                else ""
-            )
-            print(f"  neuron {f['neuron']:4d}  R^2 {f['r2']:.3f}{extra}")
-
-
-if __name__ == "__main__":
-    main()

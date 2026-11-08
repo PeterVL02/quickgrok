@@ -15,24 +15,9 @@
   - `--sub-all-at 0`: every live neuron is substituted at the first probe (step 0, i.e. after one optimizer step), using its k* fitted on the random initialisation, ignoring the thresholds. No later substitutions.
 - Checkpoints and the logged weight norm use the effective weights (`effective_state_dict`), so every existing script loads module-mode checkpoints.
 
-```
-# tuning (module, seeds 100-104; (0.7, 0.8) seed 100 reuses runs/accel_sub/module_seed100, same flags)
-uv run python -m quickgrok.train --model mlp --steps 40000 --probe-every 500 --stop-after-grok 3000 \
-    --substitute module --seed $s --tau-share $ts --tau-r2 $tr --out-dir runs/t6/tune_${ts}_${tr}/seed$s
-
-# final comparison, seeds 0-9, common flags: --model mlp --steps 40000 --probe-every 500 --stop-after-grok 3000
-vanilla:                    (no extra flags)
-project:                    --substitute project --tau-share 0.5 --tau-r2 0.8
-module:                     --substitute module  --tau-share 0.5 --tau-r2 0.8
-module_random_k:            --substitute module  --tau-share 0.5 --tau-r2 0.8 --random-k
-module_all_step0:           --substitute module  --sub-all-at 0
-module_all_step0_random_k:  --substitute module  --sub-all-at 0 --random-k
-# output: runs/t6/<arm>/seed<s>
-
-uv run python -m quickgrok.plot_compare --arm vanilla runs/t6/vanilla/seed* --arm project runs/t6/project/seed* \
-    --arm module runs/t6/module/seed* --arm module_random_k runs/t6/module_random_k/seed* \
-    --arm module_all_step0 runs/t6/module_all_step0/seed* \
-    --arm module_all_step0_random_k runs/t6/module_all_step0_random_k/seed* --out reports/figures/t6
+```bash
+uv run python experiments/substitution.py run       # tuning (seeds 100-104) and final arms (seeds 0-9)
+uv run python experiments/substitution.py figures   # arms and flags: top of experiments/substitution.py
 ```
 
 Compute: 14 tuning runs in 149 s and 60 final runs in 443 s of wall-clock time, 10 processes in parallel on the RTX 5080 (~10 min in total).

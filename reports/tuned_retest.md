@@ -16,44 +16,13 @@
   - Rows and parameters with no history are filled with their current value, i.e. given a flat history (zero slope). Every parameter that existed through the whole window is forecast exactly as before. A new test checks this across a growth event.
 - **Deviation from the brief:** J = 150 and H = 150 are not multiples of the 20-step snapshot interval, which the hook requires. I used 160 instead and kept the 20-step snapshots.
 - `save_every` 500 is already a multiple of `eval_every` 20, so no change was needed there.
-- Runs were launched 10 at a time on the RTX 5080. The launcher was a small thread pool that runs `python -m quickgrok.train <flags> --out-dir <dir>` and records each process's wall-clock; it is not committed.
+- Runs were launched 10 at a time on the RTX 5080. The launcher is a small thread pool that runs `python -m quickgrok.train <flags> --out-dir <dir>` and records each process's wall-clock (now `src/quickgrok/launch.py`).
 
 ```bash
-B="--model mlp --lr 4e-3 --weight-decay 2.0 --steps 20000 --stop-after-grok 1000 --eval-every 20 --save-every 500"
-
-# tuning, seeds 100-104, out: runs/tuned_retest/tune/<arm>/seed$s
-vanilla:            $B --seed $s
-nowcast_J${J}_H${H}: $B --seed $s --nowcast linear --nowcast-snapshot-every 20 --nowcast-every $J \
-                        --nowcast-horizon $H --nowcast-k 8 --nowcast-max-loss-ratio 1.5   # J, H in {160, 300} x {160, 400}
-module_p${P}:       $B --seed $s --substitute module --probe-every $P --tau-share 0.5 --tau-r2 0.8   # P in {100, 200}
-
-# final, seeds 0-9, out: runs/tuned_retest/<arm>/seed$s
-NC="--nowcast linear --nowcast-snapshot-every 20 --nowcast-every 160 --nowcast-horizon 160 --nowcast-k 8 --nowcast-max-loss-ratio 1.5"
-MO="--substitute module --probe-every 100 --tau-share 0.5 --tau-r2 0.8"
-vanilla:             uv run python -m quickgrok.train $B --seed $s --out-dir runs/tuned_retest/vanilla/seed$s
-nowcast_linear:      ... $B --seed $s $NC
-module:              ... $B --seed $s $MO
-module_random_k:     ... $B --seed $s $MO --random-k
-nowcast_plus_module: ... $B --seed $s $NC $MO
-
-# secondary, lr 1.6e-2, seeds 0-4, out: runs/tuned_retest_fast/<arm>/seed$s (step constants x0.4)
-BF="${B/--lr 4e-3/--lr 1.6e-2}"
-vanilla:        $BF --seed $s
-nowcast_linear: $BF --seed $s --nowcast linear --nowcast-snapshot-every 8 --nowcast-every 64 --nowcast-horizon 64 \
-                    --nowcast-k 8 --nowcast-max-loss-ratio 1.5
-module:         $BF --seed $s --substitute module --probe-every 40 --tau-share 0.5 --tau-r2 0.8
-
-# wall-clock, run alone one after another, seeds 0-2 of every final and secondary arm:
-#   the same flags plus --stop-after-grok 0, out: runs/tuned_retest_timing{,_fast}/<arm>/seed$s
-#   plus 3x `--model mlp --steps 0` to measure start-up
-
-uv run python -m quickgrok.plot_compare --arm vanilla runs/tuned_retest/vanilla/seed* \
-    --arm nowcast_linear runs/tuned_retest/nowcast_linear/seed* --arm module runs/tuned_retest/module/seed* \
-    --arm module_random_k runs/tuned_retest/module_random_k/seed* \
-    --arm nowcast_plus_module runs/tuned_retest/nowcast_plus_module/seed* --out reports/figures/tuned_retest
-uv run python -m quickgrok.plot_compare --arm vanilla runs/tuned_retest_fast/vanilla/seed* \
-    --arm nowcast_linear runs/tuned_retest_fast/nowcast_linear/seed* \
-    --arm module runs/tuned_retest_fast/module/seed* --out reports/figures/tuned_retest_fast
+uv run python experiments/tuned_retest.py run                   # tuning, final and secondary (lr 1.6e-2) arms
+uv run python experiments/tuned_retest.py timing --parallel 1   # wall-clock runs, one at a time
+uv run python experiments/tuned_retest.py figures
+# arms and flags: top of experiments/tuned_retest.py
 ```
 
 GPU time (wall-clock, RTX 5080):

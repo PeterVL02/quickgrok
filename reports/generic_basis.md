@@ -21,24 +21,11 @@ Everything after the vanilla regimes is single-seed (seed 100) or offline analys
   - **Captured energy** = ‖P[u_i, v_i] − mean‖² / ‖[u_i, v_i] − mean‖², with P the least-squares projection onto the basis.
   - **Check R²** compares the neuron's activation with its activation after projecting u_i and v_i. It uses the 20% check split of the **training rows only** (tested).
 
-```
-# vanilla regimes (seeds 100-102)
-uv run python -m quickgrok.train --model mlp --probe-every 500 --stop-after-grok 3000 \
-    --op mul --train-frac 0.3 --steps 60000 --seed $s --out-dir runs/g1/mul_vanilla/seed$s
-#   s5: --op s5 --train-frac 0.3 (and 0.5) --steps 60000 -> runs/g1/s5_vanilla[_tf0.5]/seed$s
-uv run python -m quickgrok.plot_compare --arm vanilla_tf0.3 runs/g1/s5_vanilla/seed10{0,1,2} \
-    --arm vanilla_tf0.5 runs/g1/s5_vanilla_tf0.5/seed10{0,1,2} --out reports/figures/g1/s5   # same for mul
-
-# substitution looks (seed 100), common: --model mlp --probe-every 500 --stop-after-grok 3000 --substitute module --seed 100
-add, G1:        --op add --steps 40000 --basis auto|svd --tau-energy 0.8 --tau-r2 0.8
-levels_3:       --op add|mul --steps 40000|60000 --basis levels_3 --tau-energy 0.975 --tau-r2 0.8
-self_expr:      --op add|mul --steps 40000|60000 --basis self_expr --tau-energy 0.8 --tau-r2 0.8
-                --op s5 --train-frac 0.5 --steps 60000 --basis self_expr --tau-energy 0.8 --tau-r2 0.8
-# output: runs/g1/<task>_module_<basis>/seed100; vanilla seed-100 references: runs/accel_probe/seed100 (add),
-# runs/g1/mul_vanilla/seed100, runs/g1/s5_vanilla_tf0.5/seed100
-
-# offline capture analysis (CPU, ~4 min; --cached replots)
-uv run python scripts/basis_capture.py
+```bash
+uv run python experiments/generic_basis.py run       # vanilla regimes (seeds 100-102) and looks (seed 100)
+uv run python experiments/generic_basis.py figures   # includes the offline capture analysis (CPU, ~4 min)
+# arms and flags: top of experiments/generic_basis.py; the add references are runs/accel_probe/seed100
+# (experiments/accel_probe.py) and runs/t6/vanilla (experiments/substitution.py)
 ```
 
 Compute:
