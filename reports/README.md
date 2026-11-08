@@ -24,6 +24,7 @@ Status (2026-11-08): **project concluded.** A pre-registered test failed, so per
 | [tuned_retest.md](tuned_retest.md) | Do the gains survive the tuned baseline? | In steps, yes: nowcast +37%, module +45%, both +51%. In wall-clock only nowcasting wins. Gains shrink at the fastest settings. |
 | [preregistration_monitor.md](preregistration_monitor.md) → [monitor_killtest.md](monitor_killtest.md) | Can a train-only monitor beat cheap baselines at predicting grokking? | Both monitors FAIL the forecast criterion. 0/30 false alarms on the (mostly easy) controls, but M2 fired on all 10 S5 runs, which never reached 99% (deviation: S5 never grokked at the tuned settings). Decision: blog post and stop. |
 | [preregistration_nowcast_transformer.md](preregistration_nowcast_transformer.md) → [nowcast_transformer.md](nowcast_transformer.md) | Does nowcasting save steps and wall-clock on the transformer, against a tuned lr (8e-3, wd 2)? | Null under the pre-registered rule: +22% fewer steps (p = 0.011) but only ×0.95 wall-clock (bar: ×0.90). |
+| [preregistration_fix_norm.md](preregistration_fix_norm.md) → [fix_norm.md](fix_norm.md) (literature: [literature_final.md](literature_final.md)) | Is the weight norm a lever? Pin it at the grok value (124) from step 1,000. | Inconclusive under the pre-registered rule: 15,450 vs 18,400 steps (×0.84, p = 4.4e-4), just outside the ±15% "readout" band. Runs held at the grok norm still need ~14k more steps, so reaching the norm is not sufficient. |
 
 ## Lessons worth keeping
 

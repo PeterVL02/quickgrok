@@ -11,8 +11,8 @@
 - I tried two ways to make a small network grok sooner on modular addition. **Wave modules** force hidden neurons that already look like waves to stay waves. **Nowcasting** extrapolates the weights forward and jumps there. On a tuned baseline, nowcasting cuts the steps to generalisation by 37% and wave modules by 45%. Only nowcasting also saves wall-clock time, and at the fastest learning rate tried its gain shrinks to 11% with no time saved.
 - Tuning the baseline's learning rate and weight decay mattered far more: it cut the plateau up to 18×. Against the untuned baseline I started with, the two methods looked like a 40% win, and doubling the learning rate alone beat both. This is already known in the literature.
 - A control showed that most of the wave-module gain is a built-in prior, not a jump to where the network was heading: waves of the wrong frequency helped almost as much.
-- A pre-registered test of whether signals from training data can forecast *when* a run groks failed: the plain weight norm forecast better.
-- The reading that ties it together: in this setup the plateau behaves like a clock set by the shrinking weight norm. Tuning and nowcasting run the clock faster; wave modules hand the network part of the answer.
+- A pre-registered test of whether signals from training data can forecast *when* a run groks failed. The most accurate signal was the weight norm crossing the value where earlier runs grokked, but that fires at the grok step itself: it marks grokking rather than forecasting it.
+- The reading that ties it together: in this setup grokking tracks the shrinking weight norm. Plain and nowcast runs generalise at the same norm, and tuning and nowcasting get there sooner. Whether the norm *sets* the timing is open: in a final pre-registered check, pinning it at that value grokked only 16% sooner (inconclusive), so reaching the norm is not enough on its own. Wave modules are a separate lever: they hand the network part of the answer.
 
 The rest of this page covers the setup, each method and why it did or didn't hold up, what is left, and what could be tried next. The research reports in [`reports/`](reports/README.md) have the full tables, seeds and statistics. A longer, picture-first walkthrough is in [`intuition/`](intuition/README.md).
 
@@ -48,6 +48,8 @@ Steps to 99% test accuracy (median of 10 seeds; 5 seeds for the lr ×2 row and t
 | Both | — | 1,420 (−51%) | ×1.50 (3.1 s) | — | — | combine sub-additively |
 | Task-blind replacement shapes | never trigger, stall at 94–96%, or grok late | — | — | — | — | failed |
 | Training-data monitors as forecasters | — | — | — | — | — | failed the pre-registered test |
+
+Rows use seeds 0–9 (plain training: 18,400 steps untuned). The lr ×2 row comes from the learning-rate grid in the next section, which used 5 tuning seeds (100–104; 17,900 steps untuned), so it is compared on those seeds.
 
 **Why lr 4e-3, wd 2 is "the tuned baseline" and not the fastest setting.** It was chosen before the re-test as a strongly tuned setting that still has a clear plateau (memorised by ~80 steps, generalised ~36× later). The fastest setting has only an ~11× delay, so there is little plateau left to shorten; it was run as a secondary check on 5 seeds.
 
@@ -93,12 +95,14 @@ So most of the gain is a strong prior: the module tells the network that neurons
 
 **Result.** 39% fewer steps at the untuned setting, 37% at the tuned one, and the only method that also saves wall-clock time (×0.80, 0.4 s per run). At the fastest setting the gain drops to 11% and the time saving disappears (×1.04).
 
-**Why it works.** The plateau is mostly weight decay slowly shrinking the weights. Plain and nowcast runs pass 99% test accuracy at the same weight norm (about 124); the jumps get there ~7,000 steps sooner at the untuned setting. That also explains why the gain shrinks as the baseline gets faster: the faster weight decay already does the shrinking, so there is less plateau to skip.
+**Why it works.** The plateau is mostly weight decay slowly shrinking the weights. Plain and nowcast runs pass 99% test accuracy at the same weight norm (the L2 norm of all parameters together, about 124); the jumps get there ~7,000 steps sooner at the untuned setting. That also explains why the gain shrinks as the baseline gets faster: the faster weight decay already does the shrinking, so there is less plateau to skip.
+
+**Prior work.** Forecasting weights and jumping ahead is not new: Introspection (Sinha et al. 2017), WNN (Jang et al. 2023, which introduced the term "nowcasting") and NiNo (Knyazev et al. 2025) learn a forecaster on other training runs and apply it periodically. The version here is simpler: a straight line per weight, fitted online on the run's own history.
 
 **Side results.**
 
 - A better forecaster is not a better accelerator. An online LSTM forecast the weights about twice as accurately as the straight line and grokked no sooner (11,350 vs 11,150 steps, p = 0.14).
-- Direction matters, not only size. Rescaling each weight tensor to the forecast's norm but keeping its direction gave 0% (though this control shrinks the weights less than the linear arm eventually does, so it is not a perfect match).
+- The rescale alone didn't help. Rescaling each weight tensor to the forecast's norm but keeping its direction gave 0%. As a test of the norm it is weak: the total norm dropped only ~8% below plain training by step 1,200 (at a norm around 200, far above the ~124 where grokking happens), and training had undone it by step 3,000. What helped here is moving along the forecast direction, not the rescale.
 
 ## Task-blind replacement shapes
 
@@ -128,9 +132,10 @@ Forecast error is the average of |ln(forecast / actual grok step)| over test see
 | --- | --- | --- | --- |
 | Wave detector (M1) | 0.062 | 0.057 | n/a |
 | Self-expression (M2) | 0.023 | 0.032 | 0.059 |
-| Weight norm (B3) | **0.016** | **0.029** | **0.044** |
+| lr · wd rule / typical grok step (B1 = B2, known at step 0) | 0.028 | 0.043 | 0.056 |
+| Weight norm (B3, fires at the grok step) | **0.016** | **0.029** | **0.044** |
 
-**Result: both monitors failed.** The weight norm forecast the grok step better on every arm, without any probing. Seeds agree so closely on grokking time in this setting that even the lr · wd rule, known at step 0, is within a few percent. The data-free weight transform (B4) matched the wave detector in timing and error, so fitting activations added nothing over looking at the weights.
+**Result: both monitors failed the pre-registered rule.** The rule required beating every baseline, and the weight-norm baseline (B3) had the lowest error on every arm. But B3 is not really a forecast: its threshold is the norm at which calibration runs grokked, so it fires at the grok step itself and leads on 0 of 10 seeds. Against the rules known at step 0 (B1 and B2 give identical forecasts here), the self-expression monitor was more accurate on both a + b arms while firing well before grokking, but not on a · b. The FAIL stands; in hindsight the rule should have required baselines to lead. The data-free weight transform (B4) matched the wave detector in timing and error, so fitting activations added nothing over looking at the weights.
 
 **Telling grokking runs from non-grokking ones: a lead, not a result.** Both monitors stayed silent on all 30 control runs and fired well before the grok step on the arms that grokked (median between a quarter and three quarters of the way). That is weaker than it sounds:
 
@@ -142,8 +147,8 @@ Forecast error is the average of |ln(forecast / actual grok step)| over test see
 
 ## What survives
 
-1. **The negative results**, which are the main output: the fit-and-substitute speed-up is mostly a prior, task-blind shapes don't replace it, and training-data monitors don't beat the weight norm at forecasting.
-2. **A unifying reading, for this setup:** grokking time tracks the weight norm. Plain and nowcast runs generalise at the same norm (about 124 at the untuned setting, 119 at the tuned one); tuning lr · wd and nowcasting both get there sooner, and the weight norm is the best forecaster of when it happens. Wave modules are a separate lever: they inject part of the answer. These values come from one width, one initialisation and one task, so take the mechanism, not the number.
+1. **The negative results**, which are the main output: the fit-and-substitute speed-up is mostly a prior, task-blind shapes don't replace it, and training-data monitors don't forecast the grok step better than cheap rules.
+2. **A reading for this setup, not a mechanism:** grokking tracks the weight norm. Plain and nowcast runs generalise at the same norm (about 124 untuned, 119 tuned), and tuning lr · wd and nowcasting both get there sooner. Whether the norm causes grokking is open. A final pre-registered check pinned the norm at 124 from step 1,000 ([report](reports/fix_norm.md)): those runs grokked at 15,450 steps vs 18,400 (16% sooner, p = 4e-4). That is inconclusive under the pre-set rule (≥ 2× faster would have counted as a lever, within ±15% as a readout), and confounded, because rescaling also changes the logit scale and Adam's effective step size. The pinned runs sat at the grok norm for ~14,000 steps before grokking, so reaching it is not enough. This fits Khanh et al. 2026, who find that pinning the norm *above* that value slows grokking exponentially while pinning *at* it leaves the timescale about unchanged, and it is consistent with Omnigrok's picture. Wave modules are a separate lever: they inject part of the answer. The numbers come from one width, one initialisation and one task.
 3. **Nowcasting as a cheap step saver, at moderate learning rates.** It is task-agnostic and nearly free. Its gain fades as the baseline gets faster, because faster weight decay already does the shrinking it skips.
 4. **Constrain, don't snap.** If you do inject structure into weights during training, a parametrisation that keeps it holds; a one-off projection is undone.
 5. **A lead, not a result:** monitors that tell grokking from non-grokking runs early. They passed the easy controls, but the self-expression monitor fired on every near-miss S5 run, and a data-free weight transform did as well.
@@ -163,7 +168,7 @@ Everything here used one-hidden-layer MLPs on small algorithmic tasks, apart fro
 2. **Run the control that could falsify your story.** Ask what the boring explanation predicts and design an arm where it predicts something different.
 3. **Check whether your accelerator is a prior.** If a method injects knowledge of the answer's shape, compare it with injecting that knowledge at step 0.
 4. **Report wall-clock time next to steps.** The best method in steps was 1.5× slower in time.
-5. **Give your diagnostics cheap baselines too.** The weight norm beat both monitors.
+5. **Give your diagnostics cheap baselines too, and require every baseline to lead.** The weight norm "beat" both monitors only because it fires at the grok step.
 6. **Pre-register the decisive test, and check that every arm behaves as assumed before freezing it.** The pre-registration made the decision to stop easy.
 
 ## How this was made
@@ -191,6 +196,10 @@ Training runs are not stored in the repo; see the "Raw data" note in `reports/RE
 - Nanda et al. 2023, *Progress measures for grokking via mechanistic interpretability*.
 - Liu et al. 2023, *Omnigrok: Grokking beyond algorithmic data*.
 - Pracher et al. 2026, *A Spectral Theory of Grokking: Weight Decay induces Feature Learning*, arXiv 2609.26679.
+- Khanh et al. 2026, *The Weight Norm Sets the Grokking Timescale: A Causal Delay Law*, arXiv 2606.13753 (preprint).
+- Sinha et al. 2017, *Introspection: Accelerating Neural Network Training by Learning Weight Evolution*, ICLR 2017, arXiv 1704.04959.
+- Jang et al. 2023, *Learning to Boost Training by Periodic Nowcasting Near Future Weights*, ICML 2023.
+- Knyazev et al. 2025, *Accelerating Training with Neuron Interaction and Nowcasting Networks*, ICLR 2025, arXiv 2409.04434.
 
 ## License
 
