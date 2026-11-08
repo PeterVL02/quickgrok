@@ -27,33 +27,23 @@ OUT = Path("reports/figures/fix_norm")
 
 
 def plot_norm(runs: dict[str, list[Path]], out: Path) -> None:
-    """Left: total weight norm over steps per arm; right: test accuracy against weight norm."""
-    fig, (ax_norm, ax_vs) = plt.subplots(1, 2, figsize=(11, 4.2))
+    """Total weight norm (left) and test accuracy (right) over steps, one colour per arm."""
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2), sharex=True)
     for i, (arm, dirs) in enumerate(runs.items()):
-        color = ARM_COLORS[i]
         hists = [load_history(d) for d in dirs]
-        steps, norms = stack_metric(hists, "weight_norm")
-        for run in norms:
-            ax_norm.plot(steps, run, color=color, lw=0.6, alpha=0.3)
-        ax_norm.plot(steps, np.median(norms, axis=0), color=color, lw=2, label=arm)
-        for j, h in enumerate(hists):
-            ax_vs.plot(
-                [m["weight_norm"] for m in h],
-                [m["val_acc"] for m in h],
-                color=color,
-                lw=0.8,
-                alpha=0.6,
-                label=arm if j == 0 else None,
+        for ax, key in zip(axes, ["weight_norm", "val_acc"]):
+            steps, vals = stack_metric(hists, key)
+            for run in vals:
+                ax.plot(steps, run, color=ARM_COLORS[i], lw=0.6, alpha=0.3)
+            ax.plot(
+                steps, np.median(vals, axis=0), color=ARM_COLORS[i], lw=2, label=arm
             )
-    ax_norm.set_xscale("log")
-    ax_norm.set_xlabel("training step (log)", color=MUTED, fontsize=9)
-    ax_norm.set_ylabel("total L2 weight norm", color=MUTED, fontsize=9)
-    ax_norm.set_title("Weight norm (thin: seeds)", fontsize=10, color=INK, loc="left")
-    ax_vs.set_xlabel("total L2 weight norm", color=MUTED, fontsize=9)
-    ax_vs.set_ylabel("test accuracy", color=MUTED, fontsize=9)
-    ax_vs.set_title("Test accuracy against norm", fontsize=10, color=INK, loc="left")
-    ax_vs.invert_xaxis()  # training moves right as the norm shrinks
-    for ax in (ax_norm, ax_vs):
+    axes[0].axhline(124, color=MUTED, lw=1, ls="--")
+    axes[0].text(110, 126, "plain grok norm ≈ 124", color=MUTED, fontsize=8)
+    for ax, title in zip(axes, ["Total L2 weight norm", "Test accuracy"]):
+        ax.set_xscale("log")
+        ax.set_xlabel("training step (log)", color=MUTED, fontsize=9)
+        ax.set_title(f"{title} (thin: seeds)", fontsize=10, color=INK, loc="left")
         style_axes(ax)
         ax.legend(frameon=False, fontsize=8)
     fig.tight_layout()
