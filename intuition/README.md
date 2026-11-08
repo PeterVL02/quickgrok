@@ -76,8 +76,6 @@ Three side results:
 - **Direction matters, not only size.** A control that rescales each weight tensor to the forecast's norm but keeps its direction gave 0%.
 - **Nowcasting reaches the same place sooner.** Normal and nowcast runs pass 99% test accuracy at the same weight norm, about 124. The jumps get there ~7,000 steps earlier.
 
-A published accelerator, Grokfast, gave 0% in this setting.
-
 ## 4. The control that changed the story
 
 The tempting story for trick 1 is "the probe sees where the network is heading, and we jump there". That story makes a prediction you can test: if you give each neuron the **wrong** frequency, the gain should vanish. A second test: make every neuron a wave module at step 0, before there is anything to see.
@@ -158,7 +156,7 @@ Before any runs we wrote down and committed ([pre-registration](../reports/prere
 | weight norm (B3) | **0.016** | **0.029** | **0.044** |
 
 - **Both monitors failed.** The plain weight norm forecast the grok step best on every arm, with no probing at all. A log-MAE of 0.03 means forecasts off by about 3%; even the lr · wd rule, known at step 0, landed within ~3–6%.
-- **They did tell grokking runs from non-grokking ones.** Both monitors fired on 0 of 30 control runs, and on the arms that grokked they fired before the grok step (median 25–73% of the way). The weight norm cannot do that: with 10% training data it shrinks below its threshold on 10/10 seeds without ever grokking.
+- **Telling grokking from non-grokking runs is only a lead.** Both monitors stayed silent on all 30 control runs and fired before the grok step on the arms that grokked (median 25–73% of the way). But two of the controls are easy (the weight norm also stays silent on them; it only trips on the 10%-data control), the data-free weight transform did just as well, and on S5, where no seed reached 99%, the self-expression monitor fired on all 10 seeds. Those runs peaked at 97.8–98.9%, so that is either a false alarm or a sign that the 99% cutoff is arbitrary.
 - **The data-free weight FFT (B4) matched the Fourier probe** in timing and error. Fitting activations added nothing over looking at the weights.
 - **One arm did not behave as assumed.** Permutations at the tuned settings never grokked (peak test accuracy 97.8–98.9%), although they had grokked at the old settings (~23k steps). Nobody checked this before the pre-registration was frozen. The rules were applied anyway; the verdict does not depend on that arm.
 
