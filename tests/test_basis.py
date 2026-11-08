@@ -1,7 +1,4 @@
-"""Check the weight-based substitution bases, the energy trigger and the S5 task.
-
-Run: uv run python tests/test_basis.py
-"""
+"""Check the weight-based substitution bases, the energy trigger and the S5 task."""
 
 import math
 import random
@@ -192,15 +189,3 @@ def test_check_r2_uses_training_check_rows() -> None:
     assert torch.allclose(r2, r2_on(hook.check_a, hook.check_b))
     x_val, _ = to_tensors(val, "cpu")
     assert not torch.allclose(r2, r2_on(x_val[:, 0], x_val[:, 1]))
-
-
-if __name__ == "__main__":
-    test_shapes()
-    test_capture()
-    test_auto()
-    test_levels()
-    test_self_expr()
-    test_random_seeded()
-    test_s5()
-    test_check_r2_uses_training_check_rows()
-    print("ok")

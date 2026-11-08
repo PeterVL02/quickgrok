@@ -56,14 +56,3 @@ def make_dataset(
     random.Random(seed).shuffle(examples)
     n_train = int(train_frac * len(examples))
     return examples[:n_train], examples[n_train:]
-
-
-if __name__ == "__main__":
-    train, val = make_dataset(p=97, op="div", train_frac=0.5)
-    assert len(train) + len(val) == 97 * 96
-    assert not {x for x, _ in train} & {x for x, _ in val}
-    for (a, b, eq), c in train + val:
-        assert eq == 97 and (c * b) % 97 == a
-    train, _ = make_dataset(p=113, op="add")
-    assert all((a + b) % 113 == c for (a, b, _), c in train)
-    print(f"ok: {len(train)} train examples, first: {train[0]}")

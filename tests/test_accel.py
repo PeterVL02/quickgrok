@@ -1,7 +1,4 @@
-"""Check the probe split, the harmonic share, the hook API and substitution.
-
-Run: uv run python tests/test_accel.py
-"""
+"""Check the probe split, the harmonic share, the hook API and substitution."""
 
 import json
 import math
@@ -247,16 +244,3 @@ def test_sub_all_at() -> None:
     assert events[0]["neurons"] == live and events[0]["n_substituted_total"] == len(
         live
     )
-
-
-if __name__ == "__main__":
-    test_probe_split()
-    test_harmonic_share()
-    test_optimizer_replacement()
-    test_projection()
-    test_module_matches_project()
-    test_grow_optimizer()
-    test_effective_state_dict()
-    test_random_k()
-    test_sub_all_at()
-    print("ok")

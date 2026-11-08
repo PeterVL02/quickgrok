@@ -1,4 +1,4 @@
-"""Check that the regression recovers known functions. Run: uv run python tests/test_regress.py"""
+"""Check that the regression recovers known functions."""
 
 import math
 
@@ -28,8 +28,3 @@ def test_fits() -> None:
     assert poly[1]["r2"] > 0.999
     # a periodic function is badly fit by a low-degree polynomial
     assert poly[0]["r2"] < 0.5
-
-
-if __name__ == "__main__":
-    test_fits()
-    print("ok")
