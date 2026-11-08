@@ -82,6 +82,15 @@ def make_tensors(
     return x_train, y_train, x_val, y_val
 
 
+def rescale_to_norm(model: nn.Module, norm: float) -> None:
+    """Scale all parameters jointly (in place) so their total L2 norm equals `norm`."""
+    params = list(model.parameters())
+    with torch.no_grad():
+        scale = norm / torch.cat([w.flatten() for w in params]).norm()
+        for w in params:
+            w.mul_(scale)
+
+
 def evaluate(model: nn.Module, x: Tensor, y: Tensor) -> tuple[float, float]:
     """Return (cross-entropy loss, accuracy) of the model on the given examples."""
     with torch.no_grad():
@@ -123,6 +132,8 @@ def train(
     nowcast_snapshot_every: int = 100,
     monitor_every: int = 0,
     random_labels: bool = False,
+    fix_norm: float | None = None,
+    fix_norm_from: int = 0,
 ) -> None:
     """Full-batch AdamW training.
 
@@ -135,7 +146,8 @@ def train(
     `nowcast` other than "none" adds a `NowcastHook` writing `out_dir/nowcast.jsonl` (snapshots
     every `nowcast_snapshot_every` steps).
     `monitor_every > 0` adds a `MonitorHook` writing `out_dir/monitor.jsonl`. `random_labels`
-    permutes the training targets (seeded).
+    permutes the training targets (seeded). `fix_norm` rescales all parameters jointly to that
+    total L2 norm after every optimizer step from step `fix_norm_from` on (after the hooks).
     Checkpoints and `weight_norm` use the effective weights. With `stop_after_grok`, training
     ends that many steps after test accuracy first reaches GROK_ACC. For op "s5", `p` is
     replaced by the number of symbols, `S5_ORDER`.
@@ -258,6 +270,8 @@ def train(
         accel.after_backward(step)
         opt.step()
         opt = accel.after_step(step, opt)
+        if fix_norm is not None and step >= fix_norm_from:
+            rescale_to_norm(model, fix_norm)
 
 
 def main() -> None:
@@ -351,7 +365,18 @@ def main() -> None:
         action="store_true",
         help="control: a fixed seeded permutation of the training targets",
     )
+    parser.add_argument(
+        "--fix-norm",
+        type=float,
+        default=None,
+        help="rescale all parameters to this total L2 norm after every step",
+    )
+    parser.add_argument(
+        "--fix-norm-from", type=int, default=0, help="first step of --fix-norm"
+    )
     args = parser.parse_args()
+    if args.fix_norm is not None and args.substitute != "none":
+        parser.error("--fix-norm rescales raw parameters; not with --substitute")
     if args.monitor_every and args.model != "mlp":
         parser.error("--monitor-every needs --model mlp")
     if args.substitute != "none" and args.probe_every <= 0:
@@ -394,6 +419,8 @@ def main() -> None:
         args.nowcast_snapshot_every,
         args.monitor_every,
         args.random_labels,
+        args.fix_norm,
+        args.fix_norm_from,
     )
 
 
