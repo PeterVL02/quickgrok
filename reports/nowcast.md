@@ -1,6 +1,6 @@
 # Online weight nowcasting (2026-11-07)
 
-> **Read with `reports/tuned_baseline.md`.** The +39% below is measured against vanilla at lr 1e-3, wd 1.0. Plain training with a tuned learning rate and weight decay groks up to ~18× faster (lr·wd scaling), so whether nowcasting adds anything on top of a tuned baseline is still open.
+> **Read with `reports/tuned_baseline.md`.** The +39% below is measured against vanilla at lr 1e-3, wd 1.0. Plain training with a tuned learning rate and weight decay groks up to ~18× faster (lr·wd scaling), [`tuned_retest.md`](tuned_retest.md) re-tests nowcasting there: 37% fewer steps at lr 4e-3, wd 2.
 
 **Question.** Can an online "nowcaster" cut the grokking plateau short? It forecasts where the weights are heading from the current run's own recent history and jumps there. It never uses a grokked run or test data. Omnigrok's account is that weight decay slowly shrinks the weights into a "generalising" norm band. If that is right, a forecaster that extrapolates the slow drift should shortcut it.
 
@@ -19,7 +19,6 @@
 - **Forecast skill** (logged at every attempt, before the forecaster is retrained): the forecast made from the window ending at t − horizon, compared with the realised weights at t. MSE / MSE of the no-change forecast; < 1 means it beats "weights stay put".
   - A backtest is **clean** if no accepted jump lies in its window. Otherwise the realised trajectory contains a jump that was itself the forecast, and the ratio is not a forecast skill. With horizon = jump interval = 1000, every backtest after an accepted jump is contaminated.
   - For a clean skill measure over the whole plateau I added **shadow** runs with `--nowcast-max-loss-ratio 0`: every jump is rejected and restored bit-for-bit, so training is plain vanilla and every backtest is clean. These also serve as a fresh vanilla baseline.
-- **`GrokfastHook`** (Grokfast-EMA, re-implemented from the paper's description): in `after_backward`, ema = α·ema + (1 − α)·grad, then grad += λ·ema, with the EMA starting at zero.
 - **Control `--nowcast-norm-only`** (added by me, not in the brief): the same linear forecast and verification, but each parameter tensor keeps its current direction and is only rescaled to the norm of its forecast. It tests whether the jump helps through its direction or only through shrinking the weights.
 
 ```bash
@@ -35,10 +34,8 @@ uv run python experiments/nowcast.py figures   # vanilla: runs/t6/vanilla from e
 | **linear, horizon 1000** | 10.8k, 10.7k, 11.1k, 11.1k, 11.3k | **11,100 [10,800–11,100]** | 38/53 (72%) | 1.97 (n = 15, steps 2k–4k only) |
 | linear, horizon 3000 | 15.3k, 14.7k, 15.8k, 16.1k, 16.4k | 15,800 [15,300–16,100] | 6/76 (8%) | 1.14 (n = 55) |
 | **lstm, horizon 1000** | 11.3k, 11.0k, 11.1k, 11.1k, 11.1k | **11,100 [11,100–11,100]** | 34/49 (69%) | 0.52 (n = 20) |
-| grokfast λ = 1 | 18.5k, 18.0k, 18.6k, 18.5k, 18.0k | 18,500 [18,000–18,500] | — | — |
-| **grokfast λ = 2** | 18.2k, 17.2k, 18.7k, 18.2k, 18.5k | **18,200 [18,200–18,500]** | — | — |
 
-**Chosen:** linear with horizon 1000, LSTM with horizon 1000 (the better linear horizon, as pre-registered), Grokfast with λ = 2. Linear accepted jumps and helped at horizon 1000, so the ratio-3.0 fallback was not needed. At horizon 3000 most linear jumps raise the train loss more than 1.5× and are rejected. Its few accepted late jumps *raise* the weight norm (see the figure).
+**Chosen:** linear with horizon 1000, LSTM with horizon 1000 (the better linear horizon, as pre-registered). Linear accepted jumps and helped at horizon 1000, so the ratio-3.0 fallback was not needed. At horizon 3000 most linear jumps raise the train loss more than 1.5× and are rejected. Its few accepted late jumps *raise* the weight norm (see the figure).
 
 ## Result (seeds 0–9)
 
@@ -49,7 +46,6 @@ uv run python experiments/nowcast.py figures   # vanilla: runs/t6/vanilla from e
 | **linear** (horizon 1000) | 10,100 [9,750–10,100] | **11,150 [11,100–11,275]** | 10/10 | **+39% [+36%, +42%]** | 1.8e-4 |
 | **lstm** (horizon 1000) | 10,250 [10,100–10,475] | **11,350 [11,100–11,700]** | 10/10 | **+38% [+34%, +41%]** | 1.7e-4 |
 | linear_norm_only (control) | 15,650 [15,075–16,275] | 18,400 [17,725–19,050] | 10/10 | +0% [−5%, +5%] | 0.94 |
-| grokfast (λ 2, α 0.98) | 15,900 [15,400–16,150] | 18,350 [17,650–18,475] | 10/10 | +0% [−3%, +5%] | 0.4 |
 
 How to read the table:
 - Cells are median [IQR] steps.
@@ -99,7 +95,6 @@ Vanilla's norm falls by ~0.0046 per step here. The jump removes ~1.4 at once, wh
 | linear | 149.3 | 126.5 | 133.0 [132.5–133.1] | 124.0 [123.8–124.1] |
 | lstm | 147.4 | 127.8 | 133.0 [132.9–133.1] | 123.9 [123.7–124.0] |
 | linear_norm_only | 152.9 | 136.2 | 133.0 [132.8–133.1] | 123.9 [123.7–124.1] |
-| grokfast | 159.8 | 142.8 | 138.6 [138.4–138.6] | 129.0 [129.0–129.1] |
 
 ## Interpretation
 - **Does the forecaster predict anything? Yes.** On the plain vanilla trajectory, the linear forecast 1000 steps ahead has half the error of "no change" (skill 0.51). The online LSTM has a quarter (0.24), and it gets there from step 3000, right after its first fit.
@@ -109,16 +104,13 @@ Vanilla's norm falls by ~0.0046 per step here. The jump removes ~1.4 at once, wh
   - Linear jumps at steps 1–3k are always rejected: the extrapolated early shrinkage overshoots, and the loss rises 2–1400×.
   - At horizon 3000 nearly all linear jumps were rejected (8%), and the arm was only mildly faster in tuning (15.8k).
 - **Is the gain a shortcut through the slow norm decay? Yes, as far as the outcome goes; the forecast's direction is what gets it there.**
-  - Every arm except Grokfast passes 50% and 99% test accuracy at the same weight norm as vanilla (133 and 124). Plotted against weight norm, the accuracy curves of vanilla, linear and LSTM fall on top of each other (bottom panel of `nowcast.png`). The jumping arms simply reach that norm ~7k steps sooner (126.5 vs 135.8 at step 10k).
+  - Every arm passes 50% and 99% test accuracy at the same weight norm as vanilla (133 and 124). Plotted against weight norm, the accuracy curves of vanilla, linear and LSTM fall on top of each other (bottom panel of `nowcast.png`). The jumping arms simply reach that norm ~7k steps sooner (126.5 vs 135.8 at step 10k).
   - The jump itself removes only ~1% of the norm. The rest comes from faster shrinking in the few hundred steps after each jump.
   - The **norm-only control**:
     - It gives each tensor the forecast's norm but keeps its direction. It is accepted every time and has no effect (18,400, p = 0.94).
     - At step 1000 it shrinks the weights ~30%, and training undoes this by step ~3000. Afterwards the forecast's per-tensor norm is only ~0.5% below the current one, so the control barely moves anything.
     - Rescaling alone does not shortcut the decay; moving along the forecast direction does.
     - Caveat: this control is not norm-matched to what the linear arm eventually achieves. A "shrink by 2% per jump" control would be the stronger test, and I did not run it.
-- **Grokfast: null here.** Grokfast-EMA (λ ∈ {1, 2}, α 0.98) gives +0% [−3%, +5%].
-  - It changes the dynamics: the weight norm stays higher throughout, and it groks at a *higher* norm (129 vs 124), so the accuracy-vs-norm curve is shifted.
-  - The net effect on steps is nil in this regime (AdamW lr 1e-3, wd 1.0, full batch, 30% data). The Grokfast paper's gains were reported in other settings. I did not search other α/λ or optimizer settings.
 - **Cost:**
   - Linear is free: ~150k weights × 8 snapshots, one least-squares fit and two loss evaluations per 1000 steps.
   - The LSTM roughly doubles wall-clock under GPU contention (~5 s per attempt). It buys a better forecast but no extra speed-up.

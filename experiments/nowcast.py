@@ -1,10 +1,10 @@
 """Online weight nowcasting: forecast the weights from their own history and jump there.
 
 Report: reports/nowcast.md.
-  uv run python experiments/nowcast.py run       # 25 tuning + 55 final runs
+  uv run python experiments/nowcast.py run       # 15 tuning + 45 final runs
   uv run python experiments/nowcast.py figures   # -> reports/figures/nowcast/
 The vanilla arm of the figures is runs/t6/vanilla (run it with experiments/substitution.py).
-In the nowcast diagnostics figure, arms without nowcast.jsonl (vanilla, Grokfast) only appear in
+In the nowcast diagnostics figure, arms without nowcast.jsonl (vanilla) only appear in
 the weight-norm panels.
 """
 
@@ -24,7 +24,7 @@ from quickgrok.plot_compare import ARM_COLORS, compare, stack_metric
 from quickgrok.plot_pilot import INK, MUTED, find_grok_step, load_history, style_axes
 
 # Every run: runs/nowcast/<arm>/seed<s>. --nowcast-every 1000, --nowcast-k 8,
-# --nowcast-max-loss-ratio 1.5 and --grokfast-alpha 0.98 are the defaults.
+# --nowcast-max-loss-ratio 1.5 are the defaults.
 COMMON = "--model mlp --steps 40000 --stop-after-grok 3000 --save-every 5000"
 LINEAR = "--nowcast linear --nowcast-horizon 1000"
 LSTM = "--nowcast lstm --nowcast-horizon 1000"
@@ -34,15 +34,12 @@ TUNE = {
     "tune_linear_h1000": LINEAR,
     "tune_linear_h3000": "--nowcast linear --nowcast-horizon 3000",
     "tune_lstm_h1000": LSTM,
-    "tune_grokfast_l1": "--grokfast-lambda 1",
-    "tune_grokfast_l2": "--grokfast-lambda 2",
 }
 
 SEEDS = list(range(10))
 ARMS = {
     "linear": LINEAR,
     "lstm": LSTM,
-    "grokfast": "--grokfast-lambda 2 --grokfast-alpha 0.98",
     "linear_norm_only": f"{LINEAR} --nowcast-norm-only",
     "shadow_linear": f"{LINEAR} --nowcast-max-loss-ratio 0",
 }
@@ -191,7 +188,7 @@ def plot_nowcast(arms: dict[str, list[Path]], out: Path) -> None:
 def figures() -> None:
     """Compare the final arms with t6 vanilla and draw the nowcast diagnostics."""
     arms = {"vanilla": [Path(f"runs/t6/vanilla/seed{s}") for s in SEEDS]}
-    for arm in ["shadow_linear", "linear", "lstm", "linear_norm_only", "grokfast"]:
+    for arm in ["shadow_linear", "linear", "lstm", "linear_norm_only"]:
         arms[arm] = [Path(f"runs/nowcast/{arm}/seed{s}") for s in SEEDS]
     out = Path("reports/figures/nowcast")
     compare(arms, out)
