@@ -1,3 +1,1 @@
-def main() -> None:
-    """Print a greeting; placeholder for the `quickgrok` console script."""
-    print("Hello from quickgrok!")
+"""Grokking on modular arithmetic: data, models, training with hooks, probes and plots."""

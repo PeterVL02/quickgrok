@@ -1,13 +1,18 @@
-"""Evaluate the pre-registered monitor kill test (reports/preregistration_monitor.md).
+"""Monitor kill test: can a train-only monitor beat cheap baselines at predicting grokking?
 
-Reads runs/killtest/<arm>/seed<s>/{metrics.json,monitor.jsonl}, written by train.py with
---monitor-every 50. Calibrates c (B1), the clock (B2), the B3 norm threshold and the ratio r of
-every firing method on seeds 0-9 of each grokking arm, forecasts the grok step of seeds 10-19,
-and applies the frozen pass criteria to M1 and M2. Controls use the calibration of G2, the arm
-they are derived from. Test accuracy is read only here, for scoring, never by a monitor.
+Pre-registration: reports/preregistration_monitor.md. Report: reports/monitor_killtest.md.
+  uv run python experiments/monitor_killtest.py run       # 5 pre-flight + 40 calibration + 70 test runs
+  uv run python experiments/monitor_killtest.py figures   # -> reports/figures/monitor_killtest/
+The report's GPU time, 10 processes sharing one RTX 5080: ~82 min (CPU-bound by the monitor).
+Jobs are listed in the original order: pre-flight (seed 100), calibration seeds 0-9, test seeds
+10-19. Each process runs with OMP_NUM_THREADS=2.
 
-Run: uv run python scripts/eval_monitor_killtest.py
-Writes reports/figures/monitor_killtest/{tables.md,scores.png,forecast_error.png}.
+`figures` evaluates the kill test. It reads runs/killtest/<arm>/seed<s>/{metrics.json,
+monitor.jsonl}, calibrates c (B1), the clock (B2), the B3 norm threshold and the ratio r of every
+firing method on seeds 0-9 of each grokking arm, forecasts the grok step of seeds 10-19, and
+applies the frozen pass criteria to M1 and M2. Controls use the calibration of G2, the arm they
+are derived from. Test accuracy is read only here, for scoring, never by a monitor. It writes
+tables.md, scores.png and forecast_error.png.
 """
 
 import json
@@ -23,10 +28,22 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import spearmanr
 
+from quickgrok.launch import main, make_jobs
 from quickgrok.monitor import fire_step, log_mae
 from quickgrok.plot_compare import ARM_COLORS
 from quickgrok.plot_pilot import INK, MUTED, find_grok_step, load_history, style_axes
 
+COMMON = "--model mlp --eval-every 20 --save-every 1000 --stop-after-grok 1000 --monitor-every 50"
+ARM_FLAGS = {  # runs/killtest/<arm>/seed<s>; pre-flight: runs/killtest_preflight/<arm>/seed100
+    "G1": "--op add --train-frac 0.3 --lr 1e-3 --weight-decay 1.0 --steps 40000",
+    "G2": "--op add --train-frac 0.3 --lr 4e-3 --weight-decay 2.0 --steps 20000",
+    "G3": "--op mul --train-frac 0.3 --lr 4e-3 --weight-decay 2.0 --steps 20000",
+    "G4": "--op s5 --train-frac 0.5 --lr 4e-3 --weight-decay 2.0 --steps 20000",
+    "C1": "--op add --train-frac 0.3 --lr 4e-3 --weight-decay 0.0 --steps 20000",
+    "C2": "--op add --train-frac 0.1 --lr 4e-3 --weight-decay 2.0 --steps 20000",
+    "C3": "--op add --train-frac 0.3 --lr 4e-3 --weight-decay 2.0 --steps 20000 --random-labels",
+}
+PREFLIGHT = ["G3", "G4", "C1", "C2", "C3"]
 RUNS = Path("runs/killtest")
 OUT = Path("reports/figures/monitor_killtest")
 CALIB, TEST = list(range(10)), list(range(10, 20))
@@ -70,6 +87,12 @@ ARMS: dict[str, ArmSpec] = {
 GROK_ARMS = ["G1", "G2", "G3", "G4"]
 TUNED_ARMS = ["G2", "G3", "G4"]
 CONTROL_ARMS = ["C1", "C2", "C3"]
+
+JOBS = (
+    make_jobs("killtest_preflight", {a: ARM_FLAGS[a] for a in PREFLIGHT}, [100], COMMON)
+    + make_jobs("killtest", {a: ARM_FLAGS[a] for a in GROK_ARMS}, CALIB, COMMON)
+    + make_jobs("killtest", ARM_FLAGS, TEST, COMMON)
+)
 
 
 class Run(TypedDict):
@@ -477,7 +500,7 @@ def plot_forecast_errors(errors: dict[str, dict[Method, list[float]]]) -> None:
     plt.close(fig)
 
 
-def main() -> None:
+def figures() -> None:
     """Load every run, print and write the tables, draw the figures."""
     runs = {
         arm: {
@@ -497,4 +520,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main({"run": JOBS}, {"figures": figures}, env={"OMP_NUM_THREADS": "2"})

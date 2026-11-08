@@ -1,9 +1,8 @@
 """Pilot figures: training curves and a regression probe of MLP neurons over training.
 
-Run: uv run python -m quickgrok.plot_pilot runs/pilot/seed0 runs/pilot/seed1 runs/pilot/seed2
+Used by experiments/pilot.py and experiments/mlp_baseline.py; `plot_compare` reuses its style.
 """
 
-import argparse
 import json
 from pathlib import Path
 from typing import TypedDict
@@ -355,27 +354,17 @@ def plot_neuron_maps(
     plt.close(fig)
 
 
-def main() -> None:
-    """Make all pilot figures for the given run directories."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("runs", type=Path, nargs="+")
-    parser.add_argument("--out", type=Path, default=Path("reports/figures/pilot"))
-    parser.add_argument("--layer", type=int, default=0, help="hidden layer to probe")
-    args = parser.parse_args()
-    args.out.mkdir(parents=True, exist_ok=True)
-
-    histories = [load_history(r) for r in args.runs]
+def make_figures(runs: list[Path], out: Path, layer: int = 0) -> None:
+    """Training curves of `runs`, the probe of hidden `layer` and the neuron maps of runs[0]."""
+    out.mkdir(parents=True, exist_ok=True)
+    histories = [load_history(r) for r in runs]
     groks = [find_grok_step(h) for h in histories]
-    seeds = [load_model(min(r.glob("step_*.pt")))[1]["seed"] for r in args.runs]
-    plot_training_curves(histories, seeds, args.out / "training_curves.png")
-    results = [probe_run(r, args.layer) for r in args.runs]
-    (args.out / "probe.json").write_text(json.dumps(results))
-    plot_probe(results, groks, args.out / "probe_r2.png")
-    plot_spectrum(results[0], groks[0], args.out / "frequency_spectrum.png")
-    plot_neuron_maps(args.runs[0], groks[0], args.out / "neuron_maps.png", args.layer)
+    seeds = [load_model(min(r.glob("step_*.pt")))[1]["seed"] for r in runs]
+    plot_training_curves(histories, seeds, out / "training_curves.png")
+    results = [probe_run(r, layer) for r in runs]
+    (out / "probe.json").write_text(json.dumps(results))
+    plot_probe(results, groks, out / "probe_r2.png")
+    plot_spectrum(results[0], groks[0], out / "frequency_spectrum.png")
+    plot_neuron_maps(runs[0], groks[0], out / "neuron_maps.png", layer)
     for seed, grok in zip(seeds, groks):
         print(f"seed {seed}: test acc >= {GROK_ACC:.0%} at step {grok}")
-
-
-if __name__ == "__main__":
-    main()

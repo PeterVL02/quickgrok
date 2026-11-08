@@ -1,11 +1,13 @@
-"""Nowcast diagnostics per arm: accepted jumps and forecast skill over time, and weight norms.
+"""Online weight nowcasting: forecast the weights from their own history and jump there.
 
-Run: uv run python -m quickgrok.plot_nowcast --arm vanilla runs/t6/vanilla/seed* \
-         --arm linear runs/nowcast/linear/seed* --out reports/figures/nowcast/nowcast.png
-Arms without nowcast.jsonl (vanilla, Grokfast) only appear in the weight-norm panel.
+Report: reports/nowcast.md.
+  uv run python experiments/nowcast.py run       # 25 tuning + 55 final runs
+  uv run python experiments/nowcast.py figures   # -> reports/figures/nowcast/
+The vanilla arm of the figures is runs/t6/vanilla (run it with experiments/substitution.py).
+In the nowcast diagnostics figure, arms without nowcast.jsonl (vanilla, Grokfast) only appear in
+the weight-norm panels.
 """
 
-import argparse
 import json
 from pathlib import Path
 from typing import Literal
@@ -16,9 +18,42 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from quickgrok.launch import main, make_jobs
 from quickgrok.nowcast import NowcastRecord
-from quickgrok.plot_compare import ARM_COLORS, stack_metric
+from quickgrok.plot_compare import ARM_COLORS, compare, stack_metric
 from quickgrok.plot_pilot import INK, MUTED, find_grok_step, load_history, style_axes
+
+# Every run: runs/nowcast/<arm>/seed<s>. --nowcast-every 1000, --nowcast-k 8,
+# --nowcast-max-loss-ratio 1.5 and --grokfast-alpha 0.98 are the defaults.
+COMMON = "--model mlp --steps 40000 --stop-after-grok 3000 --save-every 5000"
+LINEAR = "--nowcast linear --nowcast-horizon 1000"
+LSTM = "--nowcast lstm --nowcast-horizon 1000"
+
+TUNE_SEEDS = [100, 101, 102, 103, 104]
+TUNE = {
+    "tune_linear_h1000": LINEAR,
+    "tune_linear_h3000": "--nowcast linear --nowcast-horizon 3000",
+    "tune_lstm_h1000": LSTM,
+    "tune_grokfast_l1": "--grokfast-lambda 1",
+    "tune_grokfast_l2": "--grokfast-lambda 2",
+}
+
+SEEDS = list(range(10))
+ARMS = {
+    "linear": LINEAR,
+    "lstm": LSTM,
+    "grokfast": "--grokfast-lambda 2 --grokfast-alpha 0.98",
+    "linear_norm_only": f"{LINEAR} --nowcast-norm-only",
+    "shadow_linear": f"{LINEAR} --nowcast-max-loss-ratio 0",
+}
+SHADOW_LSTM_SEEDS = [0, 1, 2, 3, 4]
+SHADOW_LSTM = {"shadow_lstm": f"{LSTM} --nowcast-max-loss-ratio 0"}
+
+JOBS = (
+    make_jobs("nowcast", TUNE, TUNE_SEEDS, COMMON)
+    + make_jobs("nowcast", ARMS, SEEDS, COMMON)
+    + make_jobs("nowcast", SHADOW_LSTM, SHADOW_LSTM_SEEDS, COMMON)
+)
 
 
 def load_nowcast(run_dir: Path) -> list[NowcastRecord]:
@@ -52,22 +87,14 @@ def by_step(
     return xs, ys
 
 
-def main() -> None:
-    """Parse arms and write the four-panel nowcast figure."""
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    parser.add_argument("--arm", nargs="+", action="append", required=True)
-    parser.add_argument("--out", type=Path, required=True)
-    args = parser.parse_args()
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-
+def plot_nowcast(arms: dict[str, list[Path]], out: Path) -> None:
+    """Write the four-panel nowcast figure of `arms` (name -> run dirs) to `out`."""
     fig, (ax_acc, ax_skill, ax_norm, ax_vs) = plt.subplots(4, 1, figsize=(9, 13.5))
     ax_skill.sharex(ax_acc)
     ax_norm.sharex(ax_acc)
-    for i, (name, *dirs) in enumerate(args.arm):
+    for i, (name, dirs) in enumerate(arms.items()):
         color = ARM_COLORS[i % len(ARM_COLORS)]
-        hists = [load_history(Path(d)) for d in dirs]
+        hists = [load_history(d) for d in dirs]
         groks = [g for g in (find_grok_step(h) for h in hists) if g is not None]
         steps, norms = stack_metric(hists, "weight_norm")
         ax_norm.plot(steps, np.median(norms, axis=0), color=color, lw=2, label=name)
@@ -83,8 +110,8 @@ def main() -> None:
                 label=name if j == 0 else None,
             )
         axes = [ax_norm]
-        if all((Path(d) / "nowcast.jsonl").exists() for d in dirs):
-            runs = [load_nowcast(Path(d)) for d in dirs]
+        if all((d / "nowcast.jsonl").exists() for d in dirs):
+            runs = [load_nowcast(d) for d in dirs]
             ax_acc.plot(
                 *by_step(runs, "accepted"),
                 color=color,
@@ -157,9 +184,22 @@ def main() -> None:
     ax_skill.legend(frameon=False, fontsize=8, loc="upper right")
     ax_norm.legend(frameon=False, fontsize=8, loc="upper right")
     fig.tight_layout()
-    fig.savefig(args.out, dpi=150)
+    fig.savefig(out, dpi=150)
     plt.close(fig)
 
 
+def figures() -> None:
+    """Compare the final arms with t6 vanilla and draw the nowcast diagnostics."""
+    arms = {"vanilla": [Path(f"runs/t6/vanilla/seed{s}") for s in SEEDS]}
+    for arm in ["shadow_linear", "linear", "lstm", "linear_norm_only", "grokfast"]:
+        arms[arm] = [Path(f"runs/nowcast/{arm}/seed{s}") for s in SEEDS]
+    out = Path("reports/figures/nowcast")
+    compare(arms, out)
+    arms["shadow_lstm"] = [
+        Path(f"runs/nowcast/shadow_lstm/seed{s}") for s in SHADOW_LSTM_SEEDS
+    ]
+    plot_nowcast(arms, out / "nowcast.png")
+
+
 if __name__ == "__main__":
-    main()
+    main({"run": JOBS}, {"figures": figures})

@@ -1,19 +1,25 @@
-"""How much of each input column does each candidate basis capture, over training? (G1b)
+"""Generic substitution bases (G1, G1b, self_expr look): does the method work without the Fourier prior?
 
-Report: reports/generic_basis.md. Offline, CPU only. For every checkpoint of the vanilla MLP runs of add, mul and s5, and every
-input column (u_i and v_i separately, mean removed), the captured share of its energy by:
+Report: reports/generic_basis.md.
+  uv run python experiments/generic_basis.py run       # 9 vanilla runs + 7 single-seed looks
+  uv run python experiments/generic_basis.py figures   # -> reports/figures/g1/ (~4 min of CPU)
+The report's GPU time, 10 in parallel on an RTX 5080: vanilla + G1 runs 4.6 min, levels ~4 min,
+self_expr ~10 min (s5 is the slowest). The add references are runs of other experiments:
+runs/accel_probe/seed100 (experiments/accel_probe.py) and runs/t6/vanilla/seed0-2
+(experiments/substitution.py).
+
+`figures` also runs the offline capture analysis (G1b). For every checkpoint of the vanilla MLP
+runs of add, mul and s5, and every input column (u_i and v_i separately, mean removed), it
+measures the captured share of its energy by:
   fourier     harmonics of the column's best base frequency, 8 directions (knows cyclicity)
   svd_global  the 8 left singular vectors of the mean-removed [U, V] that capture it most
   levels_L    optimal 1-D k-means of the column's values into L groups (L - 1 directions)
   self_expr   greedy orthogonal matching pursuit: 8 other columns of the same matrix
 Nulls: the step-0 checkpoint and Gaussian matrices of the same shape. Skill = (capture - null) /
 (1 - null) with the Gaussian null's median. Full-grid analysis of weights; no data rows are used.
-
-Run: uv run python scripts/basis_capture.py   (~4 min; --cached replots from runs/g1/basis_capture.pt)
-Writes reports/figures/g1/basis_capture.png and prints the table.
+It writes reports/figures/g1/basis_capture.png and prints the table.
 """
 
-import argparse
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -35,9 +41,39 @@ from quickgrok.accel import (
     svd_basis,
     svd_vectors,
 )
+from quickgrok.launch import main, make_jobs
 from quickgrok.models import GrokMLP, load_model
-from quickgrok.plot_compare import ARM_COLORS
+from quickgrok.plot_compare import ARM_COLORS, compare
 from quickgrok.plot_pilot import INK, MUTED, find_grok_step, load_history, style_axes
+
+COMMON = "--model mlp --probe-every 500 --stop-after-grok 3000"
+
+# Vanilla regimes: runs/g1/<arm>/seed<s>.
+VANILLA_SEEDS = [100, 101, 102]
+VANILLA = {
+    "mul_vanilla": "--op mul --train-frac 0.3 --steps 60000",
+    "s5_vanilla": "--op s5 --train-frac 0.3 --steps 60000",
+    "s5_vanilla_tf0.5": "--op s5 --train-frac 0.5 --steps 60000",
+}
+
+# Substitution looks, seed 100: runs/g1/<arm>/seed100.
+SUB = "--substitute module"
+GENERIC = "--tau-energy 0.8 --tau-r2 0.8"
+LEVELS = "--basis levels_3 --tau-energy 0.975 --tau-r2 0.8"
+SELF_EXPR = f"--basis self_expr {GENERIC}"
+LOOKS = {
+    "add_module_auto": f"--op add --steps 40000 {SUB} --basis auto {GENERIC}",
+    "add_module_svd": f"--op add --steps 40000 {SUB} --basis svd {GENERIC}",
+    "add_module_levels3": f"--op add --steps 40000 {SUB} {LEVELS}",
+    "mul_module_levels3": f"--op mul --steps 60000 {SUB} {LEVELS}",
+    "add_module_self_expr": f"--op add --steps 40000 {SUB} {SELF_EXPR}",
+    "mul_module_self_expr": f"--op mul --steps 60000 {SUB} {SELF_EXPR}",
+    "s5_module_self_expr": f"--op s5 --train-frac 0.5 --steps 60000 {SUB} {SELF_EXPR}",
+}
+
+JOBS = make_jobs("g1", VANILLA, VANILLA_SEEDS, COMMON) + make_jobs(
+    "g1", LOOKS, [100], COMMON
+)
 
 TASKS: dict[str, list[Path]] = {
     "add": [Path(f"runs/t6/vanilla/seed{s}") for s in (0, 1, 2)],
@@ -48,8 +84,8 @@ TASKS: dict[str, list[Path]] = {
 }
 BASES = ["fourier", "svd_global", "levels_2", "levels_3", "self_expr"]
 M = 9  # constant + 8 directions, as in the substitution hook
-OUT = Path("reports/figures/g1/basis_capture.png")
-CACHE = Path("runs/g1/basis_capture.pt")  # computed captures, for --cached replots
+FIG = Path("reports/figures/g1")
+OUT = FIG / "basis_capture.png"
 
 
 class RunCapture(TypedDict):
@@ -230,26 +266,60 @@ def plot(runs: dict[str, list[RunCapture]], nulls: dict[str, dict[str, float]]) 
     plt.close(fig)
 
 
-def main() -> None:
-    """Compute captures for every run (or load them with --cached), print the table, plot."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cached", action="store_true", help=f"reuse {CACHE}")
-    args = parser.parse_args()
-    if args.cached:
-        runs, nulls = torch.load(CACHE, weights_only=False)
-    else:
-        runs = {task: [capture_run(d) for d in dirs] for task, dirs in TASKS.items()}
-        nulls: dict[str, dict[str, float]] = {}
-        for task in runs:
-            model, _ = load_model(next(TASKS[task][0].glob("step_*.pt")))
-            assert isinstance(model, GrokMLP)
-            n, d = model.embed_a.weight.shape
-            nulls[task] = gaussian_null(n, d)
-        torch.save((runs, nulls), CACHE)
+def basis_capture() -> None:
+    """Compute captures for every run, print the table and plot."""
+    runs = {task: [capture_run(d) for d in dirs] for task, dirs in TASKS.items()}
+    nulls: dict[str, dict[str, float]] = {}
+    for task in runs:
+        model, _ = load_model(next(TASKS[task][0].glob("step_*.pt")))
+        assert isinstance(model, GrokMLP)
+        n, d = model.embed_a.weight.shape
+        nulls[task] = gaussian_null(n, d)
     print_table(runs, nulls)
     print("\nGaussian nulls:", json.dumps(nulls, indent=1))
     plot(runs, nulls)
 
 
+def figures() -> None:
+    """Vanilla regimes of mul and s5, the single-seed looks, and the capture analysis."""
+
+    def g1(arm: str, seeds: list[int]) -> list[Path]:
+        """Run directories of a g1 arm."""
+        return [Path(f"runs/g1/{arm}/seed{s}") for s in seeds]
+
+    compare({"vanilla_tf0.3": g1("mul_vanilla", VANILLA_SEEDS)}, FIG / "mul")
+    compare(
+        {
+            "vanilla_tf0.3": g1("s5_vanilla", VANILLA_SEEDS),
+            "vanilla_tf0.5": g1("s5_vanilla_tf0.5", VANILLA_SEEDS),
+        },
+        FIG / "s5",
+    )
+    compare(
+        {
+            "vanilla": [Path("runs/accel_probe/seed100")],
+            "levels_3": g1("add_module_levels3", [100]),
+            "self_expr": g1("add_module_self_expr", [100]),
+        },
+        FIG / "looks_add",
+    )
+    compare(
+        {
+            "vanilla": g1("mul_vanilla", [100]),
+            "levels_3": g1("mul_module_levels3", [100]),
+            "self_expr": g1("mul_module_self_expr", [100]),
+        },
+        FIG / "looks_mul",
+    )
+    compare(
+        {
+            "vanilla": g1("s5_vanilla_tf0.5", [100]),
+            "self_expr": g1("s5_module_self_expr", [100]),
+        },
+        FIG / "looks_s5",
+    )
+    basis_capture()
+
+
 if __name__ == "__main__":
-    main()
+    main({"run": JOBS}, {"figures": figures})

@@ -1,11 +1,12 @@
-"""One-off PCA / pruning analysis of the pilot checkpoints (2026-11-07). Produces
-reports/figures/pilot/pca_rank.png. Standalone on purpose: it copies the transformer class
+"""Pilot: grokking of a 1-layer transformer and a regression probe of its neurons.
+
+Report: reports/pilot.md.
+  uv run python experiments/pilot.py run       # 3 runs, ~2 min on one GPU
+  uv run python experiments/pilot.py figures   # -> reports/figures/pilot/
+
+The PCA / pruning part (Result 3) is standalone on purpose: it copies the transformer class
 instead of importing quickgrok, so it keeps working on the pilot checkpoints.
-
-Run: uv run python scripts/pca_probe_pilot.py
 """
-
-"""PCA / prunability probe of MLP hidden activations across grokking checkpoints."""
 
 import json
 import random
@@ -19,10 +20,16 @@ import matplotlib.pyplot as plt
 import torch
 from torch import Tensor, nn
 
-ROOT = Path(__file__).resolve().parent.parent
-RUNS = ROOT / "runs" / "pilot"
-FIG = ROOT / "reports" / "figures" / "pilot" / "pca_rank.png"
-SEEDS = (0, 1, 2)
+from quickgrok.launch import main, make_jobs
+from quickgrok.plot_pilot import make_figures
+
+# One arm, runs/pilot/seed<s>.
+COMMON = "--model transformer --steps 35000"
+SEEDS = [0, 1, 2]
+JOBS = make_jobs("pilot", {"": ""}, SEEDS, COMMON)
+
+RUNS = Path("runs/pilot")
+FIG = Path("reports/figures/pilot")
 
 
 class GrokTransformer(nn.Module):
@@ -117,7 +124,7 @@ def grok_step(seed: int) -> int:
     return next(r["step"] for r in metrics if r["val_acc"] >= 0.99)
 
 
-def main() -> None:
+def pca_figure() -> None:
     """Compute per-checkpoint PCA/pruning stats, pruning sanity checks, and the figure."""
     results: dict[int, list[dict[str, float]]] = {}
     table: list[str] = []
@@ -200,7 +207,7 @@ def main() -> None:
                     f"dead {r['dead']:>3} low {r['low']:>3} tr {r['train_acc']:.3f} te {r['test_acc']:.3f}"
                 )
     print("\n".join(table))
-    (FIG.parent / "pca_rank.json").write_text(json.dumps(results))
+    (FIG / "pca_rank.json").write_text(json.dumps(results))
     plot(results)
 
 
@@ -250,8 +257,14 @@ def plot(results: dict[int, list[dict[str, float]]]) -> None:
             if i == 2:
                 ax.set_xlabel("training step")
     fig.tight_layout()
-    fig.savefig(FIG, dpi=150)
+    fig.savefig(FIG / "pca_rank.png", dpi=150)
+
+
+def figures() -> None:
+    """Write the training curves, probe, spectrum, neuron maps and PCA figures."""
+    make_figures([RUNS / f"seed{s}" for s in SEEDS], FIG)
+    pca_figure()  # last: it changes matplotlib's global rcParams
 
 
 if __name__ == "__main__":
-    main()
+    main({"run": JOBS}, {"figures": figures})

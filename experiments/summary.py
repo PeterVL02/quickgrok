@@ -1,19 +1,22 @@
 """Summary figure for the README: steps to 99% test accuracy per method and baseline setting.
 
+  uv run python experiments/summary.py figures   # -> reports/figures/blog/summary.png
+
+
 The numbers are medians copied from the reports (no run data needed):
   lr 1e-3 / wd 1   reports/substitution.md, reports/nowcast.md (10 seeds)
   lr 2e-3 / wd 1   reports/tuned_baseline.md (5 seeds)
   lr 4e-3 / wd 2   reports/tuned_retest.md (10 seeds)
   lr 1.6e-2 / wd 2 reports/tuned_retest.md, secondary check (5 seeds)
-
-Run: uv run python scripts/plot_blog_summary.py  (writes reports/figures/blog/summary.png)
 """
 
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-OUT = Path(__file__).resolve().parents[1] / "reports" / "figures" / "blog"
+from quickgrok.launch import main
+
+OUT = Path("reports/figures/blog")
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 
 SETTINGS = [
@@ -31,7 +34,7 @@ METHODS: dict[str, tuple[str, str, list[int | None]]] = {
 }
 
 
-def main() -> None:
+def figures() -> None:
     """Draw one row per baseline setting, one marker per method, on a log step axis."""
     fig, ax = plt.subplots(figsize=(8, 4.2))
     rows = range(len(SETTINGS))
@@ -108,4 +111,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main({}, {"figures": figures})
