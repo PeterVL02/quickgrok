@@ -37,6 +37,7 @@ from quickgrok.models import (  # noqa: F401  (re-exported for `from quickgrok.t
     get_activation_layers,
     load_model,
 )
+from quickgrok.monitor import MonitorHook
 from quickgrok.nowcast import ForecasterName, GrokfastHook, NowcastHook
 
 GROK_ACC = 0.99  # test accuracy that counts as grokked
@@ -56,6 +57,29 @@ def to_tensors(examples: list[Example], device: str) -> tuple[Tensor, Tensor]:
     x = torch.tensor([tokens for tokens, _ in examples], device=device)
     y = torch.tensor([c for _, c in examples], device=device)
     return x, y
+
+
+def permute_labels(y: Tensor, seed: int) -> Tensor:
+    """A fixed permutation of the targets `y`, seeded by `seed` (random-label control)."""
+    perm = torch.randperm(len(y), generator=torch.Generator().manual_seed(seed))
+    return y[perm.to(y.device)]
+
+
+def make_tensors(
+    p: int,
+    op: Operation,
+    train_frac: float,
+    seed: int,
+    device: str,
+    random_labels: bool = False,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """(x_train, y_train, x_val, y_val); `random_labels` permutes the training targets only."""
+    train_set, val_set = make_dataset(p, op, train_frac, seed)
+    x_train, y_train = to_tensors(train_set, device)
+    x_val, y_val = to_tensors(val_set, device)
+    if random_labels:
+        y_train = permute_labels(y_train, seed)
+    return x_train, y_train, x_val, y_val
 
 
 def evaluate(model: nn.Module, x: Tensor, y: Tensor) -> tuple[float, float]:
@@ -99,6 +123,8 @@ def train(
     grokfast_lambda: float = 0.0,
     grokfast_alpha: float = 0.98,
     nowcast_snapshot_every: int = 100,
+    monitor_every: int = 0,
+    random_labels: bool = False,
 ) -> None:
     """Full-batch AdamW training.
 
@@ -114,16 +140,17 @@ def train(
     `out_dir/substitutions.jsonl` (see `SubstitutionHook` for `random_k` and `sub_all_at`).
     `nowcast` other than "none" adds a `NowcastHook` writing `out_dir/nowcast.jsonl` (snapshots
     every `nowcast_snapshot_every` steps);
-    `grokfast_lambda > 0` adds a `GrokfastHook`. Checkpoints and `weight_norm` use the effective weights. With `stop_after_grok`, training
+    `grokfast_lambda > 0` adds a `GrokfastHook`. `monitor_every > 0` adds a `MonitorHook`
+    writing `out_dir/monitor.jsonl`. `random_labels` permutes the training targets (seeded). Checkpoints and `weight_norm` use the effective weights. With `stop_after_grok`, training
     ends that many steps after test accuracy first reaches GROK_ACC.
     """
     assert save_every % eval_every == 0, "save_every must be a multiple of eval_every"
     p = S5_ORDER if op == "s5" else p
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(seed)
-    train_set, val_set = make_dataset(p, op, train_frac, seed)
-    x_train, y_train = to_tensors(train_set, device)
-    x_val, y_val = to_tensors(val_set, device)
+    x_train, y_train, x_val, y_val = make_tensors(
+        p, op, train_frac, seed, device, random_labels
+    )
 
     model = build_model(model_name, p, n_hidden).to(device)
     opt = torch.optim.AdamW(
@@ -174,6 +201,18 @@ def train(
                 max_loss_ratio=nowcast_max_loss_ratio,
                 seed=seed,
                 norm_only=nowcast_norm_only,
+            )
+        )
+    if monitor_every:
+        hooks.append(
+            MonitorHook(
+                x_train,
+                y_train,
+                p,
+                out_dir / "monitor.jsonl",
+                monitor_every,
+                seed,
+                cyclic=op == "add",
             )
         )
     accel = Accelerator(model, hooks)
@@ -309,7 +348,20 @@ def main() -> None:
     )
     parser.add_argument("--grokfast-lambda", type=float, default=0.0, help="0 = off")
     parser.add_argument("--grokfast-alpha", type=float, default=0.98)
+    parser.add_argument(
+        "--monitor-every",
+        type=int,
+        default=0,
+        help="0 = off; log the train-only monitors (needs --model mlp)",
+    )
+    parser.add_argument(
+        "--random-labels",
+        action="store_true",
+        help="control: a fixed seeded permutation of the training targets",
+    )
     args = parser.parse_args()
+    if args.monitor_every and args.model != "mlp":
+        parser.error("--monitor-every needs --model mlp")
     if args.substitute != "none" and args.probe_every <= 0:
         parser.error("--substitute needs --probe-every > 0")
     if args.substitute == "none" and (args.random_k or args.sub_all_at is not None):
@@ -350,6 +402,8 @@ def main() -> None:
         args.grokfast_lambda,
         args.grokfast_alpha,
         args.nowcast_snapshot_every,
+        args.monitor_every,
+        args.random_labels,
     )
 
 
