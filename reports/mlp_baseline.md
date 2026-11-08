@@ -13,11 +13,11 @@ Single-seed exploration over 30k steps:
 | Train fraction | Weight decay | Test acc ≥ 99% |
 |---|---|---|
 | 0.3 | 1.0 | between 15k and 20k |
-| 0.3 | 0.3 | between 20k and 25k |
 | 0.4 | 1.0 | between 5k and 10k |
+| 0.4 | 0.3 | between 20k and 25k |
 | 0.5 | 1.0 | before 5k |
 
-At 40–50% training data the delay mostly disappears. We keep the pilot's 0.3 / 1.0.
+At 40–50% training data the delay mostly disappears, unless weight decay is lowered too. (Correction 2026-11-08: an earlier version listed the wd 0.3 run at train fraction 0.3; its split matches the 0.4 run.) We keep the pilot's 0.3 / 1.0.
 
 ## Result: a clear and very consistent grokking delay
 

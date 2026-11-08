@@ -16,11 +16,9 @@ from quickgrok.plot_pilot import make_figures
 COMMON = "--model mlp --steps 40000"
 SEEDS = [0, 1, 2, 3, 4]
 # "Choosing the regime": single-seed exploration over 30k steps, runs/mlp_baseline/<arm>/seed0.
-# The report's second row says train fraction 0.3; the original run directory (wd03_f40) and its
-# metrics.json point to train fraction 0.4. The report's value is used here.
 EXPLORE = {
     "explore_tf0.3_wd1": "--train-frac 0.3 --weight-decay 1.0",
-    "explore_tf0.3_wd0.3": "--train-frac 0.3 --weight-decay 0.3",
+    "explore_tf0.4_wd0.3": "--train-frac 0.4 --weight-decay 0.3",
     "explore_tf0.4_wd1": "--train-frac 0.4 --weight-decay 1.0",
     "explore_tf0.5_wd1": "--train-frac 0.5 --weight-decay 1.0",
 }
