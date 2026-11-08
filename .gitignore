@@ -18,3 +18,5 @@ tasks/
 
 CLAUDE.md
 PROGRESS.md
+# graphify knowledge graph (local only)
+graphify-out/
