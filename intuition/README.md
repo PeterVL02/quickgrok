@@ -10,7 +10,7 @@ A one-hidden-layer MLP learning a + b mod 97 memorises its training set in ~200 
 
 1. **A control showed the main gain is a prior.** Forcing neurons into waves of the *wrong* frequency helped almost as much as the right one.
 2. **A tuned baseline was faster than both tricks.** Doubling the learning rate alone beat them at the old settings.
-3. **A pre-registered test failed.** Signals computed from training data did not predict *when* a run groks better than the plain weight norm, so the project stopped.
+3. **A pre-registered test failed.** Signals computed from training data did not predict *when* a run groks better than cheap rules, so the project stopped. (The best "rule", the weight norm, only fires at the grok step itself.)
 
 What a practitioner can take away is in [section 8](#8-takeaways-for-practitioners).
 
@@ -155,7 +155,7 @@ Before any runs we wrote down and committed ([pre-registration](../reports/prere
 | self-expression (M2) | 0.023 | 0.032 | 0.059 |
 | weight norm (B3) | **0.016** | **0.029** | **0.044** |
 
-- **Both monitors failed.** The plain weight norm forecast the grok step best on every arm, with no probing at all. A log-MAE of 0.03 means forecasts off by about 3%; even the lr · wd rule, known at step 0, landed within ~3–6%.
+- **Both monitors failed.** The weight norm had the lowest error on every arm, but it is not a real forecast: its threshold is the norm where earlier runs grokked, so it fires at the grok step itself. Against the rules known at step 0, the self-expression monitor was more accurate on both a + b arms. A log-MAE of 0.03 means forecasts off by about 3%; even the lr · wd rule, known at step 0, landed within ~3–6%.
 - **Telling grokking from non-grokking runs is only a lead.** Both monitors stayed silent on all 30 control runs and fired before the grok step on the arms that grokked (median 25–73% of the way). But two of the controls are easy (the weight norm also stays silent on them; it only trips on the 10%-data control), the data-free weight transform did just as well, and on S5, where no seed reached 99%, the self-expression monitor fired on all 10 seeds. Those runs peaked at 97.8–98.9%, so that is either a false alarm or a sign that the 99% cutoff is arbitrary.
 - **The data-free weight FFT (B4) matched the Fourier probe** in timing and error. Fitting activations added nothing over looking at the weights.
 - **One arm did not behave as assumed.** Permutations at the tuned settings never grokked (peak test accuracy 97.8–98.9%), although they had grokked at the old settings (~23k steps). Nobody checked this before the pre-registration was frozen. The rules were applied anyway; the verdict does not depend on that arm.
@@ -169,7 +169,7 @@ Per the rule agreed in advance, the project stopped. Details: [monitor_killtest.
 3. **A prior can look like an accelerator.** If your method injects knowledge of the answer's shape, compare it with injecting that knowledge from step 0. Here that was 26× faster.
 4. **Constrain, don't snap.** Writing a good solution into the weights once is undone by training; a parametrisation that keeps the shape holds.
 5. **Measure wall-clock, not only steps.** The best method in steps was 1.5× slower in time. Report both, and say which question each one answers.
-6. **Check cheap baselines for your diagnostics too.** The weight norm beat both clever monitors at forecasting.
+6. **Check cheap baselines for your diagnostics too, and make them lead.** The weight norm "beat" both monitors only because it fires at the grok step.
 7. **Pre-register the decisive test, and check every arm behaves as assumed before you freeze it.** The pre-registration made the stop decision easy. The S5 arm that never grokked shows the step it was missing.
 
 ## Where to read more
