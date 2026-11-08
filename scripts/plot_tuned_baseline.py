@@ -86,7 +86,7 @@ def main() -> None:
     style_axes(ax)
     ax.legend(frameon=False, fontsize=8)
     ax.set_title(
-        "Vanilla MLP: grokking time scales with 1 / (lr · wd)",
+        "Vanilla MLP: grokking time falls roughly like 1 / (lr · wd); lr matters most",
         fontsize=11,
         color=INK,
         loc="left",

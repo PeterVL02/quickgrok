@@ -32,7 +32,8 @@ uv run python scripts/plot_tuned_baseline.py
 | 1.6e-2 | 2 | 0.032 | 1,000 | 100 |
 | any | 4 | — | most seeds never grok within 40k | — |
 
-- **Grokking time scales almost exactly with 1 / (lr · wd)**, the per-step weight shrinkage of decoupled weight decay. It saturates near ~1,000 steps. This is Omnigrok's account, measured directly: the plateau is the time weight decay needs to shrink the weights into the generalising norm band.
+- **Grokking time falls roughly like 1 / (lr · wd)** (the per-step weight shrinkage of decoupled weight decay), from 17,900 to ~1,000 steps, where it saturates. This is consistent with Omnigrok's account and with published scaling laws: the plateau is roughly the time weight decay needs to shrink the weights into the generalising norm band.
+- **But the product is only a rough guide here; the learning rate dominates.** At equal lr·wd the run with the larger lr is clearly faster (0.004: lr 8e-3/wd 0.5 → 3,500 vs lr 2e-3/wd 2 → 9,200; 0.002: lr 4e-3/wd 0.5 → 6,900 vs lr 1e-3/wd 2 → 19,800). At lr 1e-3 and 2e-3, raising wd from 1 to 2 makes grokking slightly *slower*. In the figure the curves for different weight decays don't collapse onto one line. (Correction 2026-11-07: an earlier version of this report said "almost exactly", which overstated it.)
 - **It is still grokking.** Every tuned setting memorises by step ~100 and generalises 10–40× later. The delay shrinks but doesn't vanish within this grid.
 - **Simply doubling the learning rate (8,700 steps) beats both of our methods** (10,800 and 11,150) at the old setting. The best tuned setting (1,000 steps) is ~18× faster than the old baseline.
 - Too much decay (wd 4) prevents grokking at every lr tried.
