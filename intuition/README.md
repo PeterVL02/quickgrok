@@ -106,15 +106,15 @@ Every comparison so far used lr 1e-3 and weight decay 1, inherited from the pilo
 - **Grok time falls up to ~18×**, from 17,900 steps to about 1,000, roughly like **1 / (lr · wd)** (the dashed line).
 - **Doubling the learning rate alone (8,700 steps) beat both tricks** at the old settings (10,800 and 11,150, the dotted lines).
 - **The product is only a rough guide; the learning rate dominates.** At equal lr · wd the run with the larger lr is clearly faster (lr 8e-3 / wd 0.5: 3,500 steps; lr 2e-3 / wd 2: 9,200). At lr 1e-3, raising wd from 1 to 2 made grokking slightly slower (19,800). Weight decay 4 stopped most seeds from grokking within 40,000 steps.
-- **It is still grokking.** Every setting memorises in 100–200 steps and generalises 10–40× later.
+- **It is still grokking.** Every setting memorises in 100–200 steps and generalises 10–90× later.
 
-Why lr · wd? AdamW shrinks every weight by the fraction lr · wd at each step. If grokking waits for the weights to shrink to a certain size (about 124 here), doubling the shrink rate roughly halves the wait. This also explains part of nowcasting: its jumps go where decay was taking the weights anyway.
+Why lr · wd? AdamW shrinks every weight by the fraction lr · wd at each step. If grokking waits for the weights to shrink to a certain size (about 124 at the original setting, 119 at the tuned one), doubling the shrink rate roughly halves the wait. This also explains part of nowcasting: its jumps go where decay was taking the weights anyway.
 
 None of this is new. The dependence of grok time on lr and wd is in the literature (e.g. Pracher et al. 2026, arXiv 2609.26679), and the "weights must shrink into a good range" picture is Omnigrok's (Liu et al. 2023). A literature search before the first comparison would have saved a detour.
 
 ## 6. On a tuned baseline: steps are not seconds
 
-Do the tricks still help on top of a tuned baseline? We re-ran everything at lr 4e-3 and weight decay 2, where normal training groks in ~2,900 steps. The tricks' own settings (probe interval, jump interval and horizon) were re-tuned on 5 separate seeds first, then fixed for 10 new seeds.
+Do the tricks still help on top of a tuned baseline? We re-ran everything at lr 4e-3 and weight decay 2, where normal training groks in ~2,900 steps. The tricks' own settings (probe interval, jump interval and horizon) were re-tuned on separate tuning seeds first, then fixed and re-tested on the same 10 seeds as before (0–9).
 
 ![tuned results](figures/tuned_results.png)
 
@@ -184,6 +184,7 @@ Per the rule agreed in advance, the project stopped. Details: [monitor_killtest.
 | lr · wd grid | [tuned_baseline.md](../reports/tuned_baseline.md) |
 | Re-test on the tuned baseline | [tuned_retest.md](../reports/tuned_retest.md) |
 | Kill test | [preregistration_monitor.md](../reports/preregistration_monitor.md), [monitor_killtest.md](../reports/monitor_killtest.md) |
+| Nowcasting on a tuned transformer (null: 22% fewer steps, ×0.95 wall-clock) | [preregistration_nowcast_transformer.md](../reports/preregistration_nowcast_transformer.md), [nowcast_transformer.md](../reports/nowcast_transformer.md) |
 
 ## Figures
 
