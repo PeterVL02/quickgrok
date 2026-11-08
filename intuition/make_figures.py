@@ -1,11 +1,13 @@
-"""Make the teaching figures for intuition/README.md.
+"""Make the figures for intuition/README.md.
 
 Run from the repo root: uv run python intuition/make_figures.py
-Reads (CPU only) mlp_baseline/seed0, t6, tuned_vanilla and tuned_retest under the run roots,
-and writes PNGs to intuition/figures/. The run roots default to ./runs. To read runs kept
-elsewhere (for example in other git worktrees), set QUICKGROK_RUN_ROOTS to folders separated
-by os.pathsep (";" on Windows, ":" elsewhere). A figure whose runs are missing is skipped
-with a warning.
+Reads (CPU only) runs under the run roots and writes PNGs to intuition/figures/:
+clock.png needs no runs; story_curve, neuron_lens and nowcast_idea need mlp_baseline/seed0;
+results_dots needs t6; baseline_lesson needs tuned_vanilla; tuned_results needs
+tuned_retest. The run roots default to ./runs. To read runs kept elsewhere (for example in
+the main checkout), set QUICKGROK_RUN_ROOTS to folders separated by os.pathsep (";" on
+Windows, ":" elsewhere). A figure whose runs are missing is skipped with a warning and its
+committed PNG is left as it is.
 """
 
 import json
@@ -17,11 +19,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import ListedColormap
-from matplotlib.patches import Patch
 
-from quickgrok.accel import harmonic_basis
-from quickgrok.data import make_dataset
 from quickgrok.models import load_model
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -48,11 +46,6 @@ ARMS = {  # run folder -> plain-language label, in plotting order
     "module_all_step0": "all waves from the start",
     "module_all_step0_random_k": "all waves from the start, wrong frequencies",
 }
-SWAP_NEURON = (
-    15,
-    2,
-    3_000,
-)  # neuron, fitted frequency, swap step: first event of seed 0
 OUT = Path(__file__).resolve().parent / "figures"
 P = 97
 NEURON = (
@@ -62,9 +55,6 @@ NEURON = (
 BLUE, ORANGE, GREEN, YELLOW = "#2a78d6", "#eb6834", "#1baf7a", "#eda100"
 COLOURS = (BLUE, ORANGE, GREEN, YELLOW, "#e87ba4", "#008300")
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
-TEST_TINT = (
-    "#f7d5c6"  # light orange for the many held-out cells, so the train cells stand out
-)
 
 plt.rcParams.update(
     {
@@ -126,28 +116,6 @@ def load_input_weights(step: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 def find_frequency(y: np.ndarray) -> int:
     """Return the frequency k in 1..(p-1)/2 with the largest Fourier amplitude in `y` (length p)."""
     return int(np.abs(np.fft.rfft(y - y.mean()))[1:].argmax()) + 1
-
-
-def fit_r2(X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, float]:
-    """Least-squares fit of `y` on the columns of `X`; return the fitted values and R²."""
-    coef, *_ = np.linalg.lstsq(X, y, rcond=None)
-    y_hat = X @ coef
-    return y_hat, float(1 - ((y - y_hat) ** 2).sum() / ((y - y.mean()) ** 2).sum())
-
-
-def poly_features(x: np.ndarray, degree: int) -> np.ndarray:
-    """Columns 1, x, ..., x^degree with x rescaled to [-1, 1] for a stable solve."""
-    z = 2 * x / x.max() - 1
-    return np.stack([z**d for d in range(degree + 1)], axis=1)
-
-
-def wave_features(x: np.ndarray, k: int, harmonics: tuple[int, ...]) -> np.ndarray:
-    """Columns 1, cos(2πmkx/p), sin(2πmkx/p) for each harmonic m."""
-    cols = [np.ones_like(x, dtype=float)]
-    for m in harmonics:
-        w = 2 * np.pi * m * k * x / P
-        cols += [np.cos(w), np.sin(w)]
-    return np.stack(cols, axis=1)
 
 
 def plot_clock() -> None:
@@ -253,64 +221,6 @@ def plot_clock() -> None:
     save(fig, "clock.png")
 
 
-def plot_table_split() -> None:
-    """The (a + b) mod 97 table, the real 30% train split, and a zoomed corner with numbers."""
-    a, b = np.meshgrid(np.arange(P), np.arange(P), indexing="ij")
-    table = (a + b) % P
-    train, _ = make_dataset(P, "add", 0.3, seed=0)
-    is_train = np.zeros((P, P), dtype=bool)
-    for (x, y, _), _c in train:
-        is_train[x, y] = True
-
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5.6), gridspec_kw={"wspace": 0.25})
-    ax = axes[0]
-    im = ax.imshow(table, cmap="Blues", origin="upper")
-    ax.set_title("Answer table: (a + b) mod 97")
-    cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
-    cb.ax.tick_params(colors=MUTED, labelsize=8)
-    cb.outline.set_visible(False)
-
-    ax = axes[1]
-    ax.imshow(is_train, cmap=ListedColormap([TEST_TINT, BLUE]), origin="upper")
-    ax.set_title(f"Which cells the network may see ({is_train.mean():.0%})")
-    ax.legend(
-        handles=[
-            Patch(color=BLUE, label=f"train: {is_train.sum():,} pairs"),
-            Patch(color=TEST_TINT, label=f"test (hidden): {(~is_train).sum():,} pairs"),
-        ],
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.1),
-        ncol=2,
-        fontsize=9,
-    )
-    for ax in axes[:2]:
-        ax.set_xlabel("b")
-        ax.set_ylabel("a")
-        ax.tick_params(colors=MUTED, labelsize=8)
-
-    z = 12
-    ax = axes[2]
-    ax.imshow(is_train[:z, :z], cmap=ListedColormap([TEST_TINT, BLUE]), origin="upper")
-    for x in range(z):
-        for y in range(z):
-            ax.text(
-                y,
-                x,
-                str(table[x, y]),
-                ha="center",
-                va="center",
-                fontsize=8,
-                color="white" if is_train[x, y] else INK,
-            )
-    ax.set_xticks(range(z))
-    ax.set_yticks(range(z))
-    ax.tick_params(colors=MUTED, labelsize=8, length=0)
-    ax.set_xlabel("b")
-    ax.set_ylabel("a")
-    ax.set_title(f"Zoom on the top-left {z}×{z} corner")
-    save(fig, "table_split.png")
-
-
 def plot_story_curve() -> None:
     """Train vs test accuracy of MLP seed 0 on a log step axis, with the two phases marked."""
     hist = json.loads((find_run(RUN) / "metrics.json").read_text())
@@ -406,75 +316,6 @@ def plot_neuron_lens() -> None:
     save(fig, "neuron_lens.png")
 
 
-def plot_poly_vs_wave() -> None:
-    """A grokked neuron's input weight U[:, i] vs a, fit with a polynomial and with waves."""
-    U, _, _ = load_input_weights(40_000)
-    y = U[:, NEURON]
-    a = np.arange(P, dtype=float)
-    k = find_frequency(y)
-    poly_hat, poly_r2 = fit_r2(poly_features(a, 6), y)
-    wave_hat, wave_r2 = fit_r2(wave_features(a, k, (1,)), y)
-    harm_hat, harm_r2 = fit_r2(wave_features(a, k, (1, 2, 3)), y)
-
-    fig, axes = plt.subplots(1, 2, figsize=(14, 4.8), gridspec_kw={"wspace": 0.2})
-    ax = axes[0]
-    ax.plot(a, y, "o", color=INK, ms=3.5, label="weight from input a to the neuron")
-    ax.plot(
-        a,
-        poly_hat,
-        color=ORANGE,
-        lw=2,
-        label=f"best polynomial, degree 6 (R² = {poly_r2:.2f})",
-    )
-    ax.plot(
-        a,
-        wave_hat,
-        "o",
-        mfc="none",
-        color=BLUE,
-        ms=5,
-        label=f"best wave, frequency {k} (R² = {wave_r2:.2f})",
-    )
-    ax.set_xlabel("a (normal order 0, 1, 2, ..., 96)")
-    ax.set_ylabel("input weight U[a]")
-    ax.set_title("After grokking, a in normal order: looks like noise")
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2, fontsize=9)
-
-    order = np.argsort((k * a.astype(int)) % P)
-    pos = np.arange(P)
-    ax = axes[1]
-    ax.plot(pos, y[order], "o", color=INK, ms=3.5, label="same weights, re-ordered")
-    ax.plot(
-        pos,
-        wave_hat[order],
-        color=BLUE,
-        lw=2,
-        label=f"wave, frequency {k} (R² = {wave_r2:.2f})",
-    )
-    ax.plot(
-        pos,
-        harm_hat[order],
-        color=GREEN,
-        lw=1.5,
-        ls="--",
-        label=f"wave + 2 harmonics (R² = {harm_r2:.2f})",
-    )
-    ax.set_xlabel(f"a sorted by {k}·a mod 97 (where a sits on the frequency-{k} clock)")
-    ax.set_title("Same neuron, a re-ordered: a square wave, which waves can fit")
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2, fontsize=9)
-    for ax in axes:
-        style_axes(ax)
-    fig.suptitle(
-        f"Neuron {NEURON}: polynomial R² = {poly_r2:.2f}, wave R² = {wave_r2:.2f}"
-        f" ({harm_r2:.2f} with harmonics)",
-        x=0.1,
-        y=1.02,
-        ha="left",
-        fontsize=12,
-    )
-    save(fig, "poly_vs_wave.png")
-
-
 def load_history(run: Path) -> tuple[np.ndarray, np.ndarray]:
     """Return logged steps and test accuracy of one run from its metrics.json."""
     hist = json.loads((run / "metrics.json").read_text())
@@ -485,37 +326,6 @@ def grok_step(run: Path) -> int:
     """First logged step at which test accuracy reaches 99%."""
     steps, test = load_history(run)
     return int(steps[np.argmax(test >= 0.99)])
-
-
-def plot_jump_idea() -> None:
-    """Measured test accuracy (median of 10 seeds) for normal training and the three jump arms."""
-    end = 21_000
-    grid = np.arange(0, end + 1, 100)
-    fig, ax = plt.subplots(figsize=(9, 5))
-    for (arm, label), color in zip(list(ARMS.items())[:4], COLOURS):
-        curves = []
-        for run in sorted(find_run(f"{T6}/{arm}").glob("seed*")):
-            steps, test = load_history(run)
-            # A run stops 3,000 steps after grokking; hold its last value after that.
-            curves.append(np.interp(grid, steps, test))
-        ax.plot(grid, np.median(curves, axis=0), color=color, lw=2.5, label=label)
-    ax.axvline(2_250, color=MUTED, ls=":", lw=1)
-    ax.text(
-        2_400,
-        0.9,
-        "first neurons swapped\n(step ~2,250)",
-        color=MUTED,
-        fontsize=9,
-        va="top",
-    )
-    ax.set_xlim(0, end)
-    ax.set_ylim(-0.05, 1.05)
-    ax.set_xlabel("training step")
-    ax.set_ylabel("test accuracy (median of 10 seeds)")
-    ax.set_title("The jump, measured: swapping wave-shaped neurons as they appear")
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=2, fontsize=9)
-    style_axes(ax)
-    save(fig, "jump_idea.png")
 
 
 def draw_seed_dots(ax: plt.Axes, rows: list[tuple[str, list[Path]]], dx: float) -> None:
@@ -559,58 +369,6 @@ def plot_results_dots() -> None:
     style_axes(ax)
     ax.grid(axis="y", visible=False)
     save(fig, "results_dots.png")
-
-
-def outside_share(run: Path, neuron: int, k: int) -> tuple[np.ndarray, np.ndarray]:
-    """Share of a neuron's input-weight energy (column of U) outside its fitted waves, per checkpoint.
-
-    The waves are the 9 basis functions used by the substitution: a constant plus cos and sin
-    of frequency k and its harmonics 2k, 3k, 4k.
-    """
-    B = harmonic_basis([k], P, 4)[0].double().numpy()
-    proj = B @ np.linalg.pinv(B)
-    steps, shares = [], []
-    for ckpt in sorted(run.glob("step_*.pt")):
-        u = (
-            load_model(ckpt)[0]
-            .state_dict()["embed_a.weight"]
-            .double()
-            .numpy()[:, neuron]
-        )
-        r = u - proj @ u
-        steps.append(int(ckpt.stem.removeprefix("step_")))
-        shares.append(float(r @ r / (u @ u)))
-    return np.array(steps), np.array(shares)
-
-
-def plot_snap_vs_mould() -> None:
-    """One neuron (seed 0) swapped at the same moment in a 'snap once' and a 'module' run."""
-    neuron, k, swap = SWAP_NEURON
-    fig, axes = plt.subplots(1, 2, figsize=(14, 4.8), gridspec_kw={"wspace": 0.2})
-    for arm, color in zip(list(ARMS)[:3], COLOURS):
-        steps, share = outside_share(find_run(f"{T6}/{arm}/seed0"), neuron, k)
-        if (
-            arm != "vanilla"
-        ):  # checkpoints are saved just before the swap; right after it is 0
-            i = int(np.searchsorted(steps, swap)) + 1
-            steps, share = np.insert(steps, i, swap), np.insert(share, i, 0.0)
-        for ax in axes:
-            ax.plot(steps, 100 * share, color=color, lw=2.2, label=ARMS[arm])
-    for ax in axes:
-        ax.axvline(swap, color=MUTED, ls=":", lw=1)
-        ax.set_xlabel("training step")
-        style_axes(ax)
-    axes[0].set_ylabel("% of weight energy outside its waves")
-    axes[0].text(swap + 300, 70, f"swap at step {swap:,}", color=MUTED, fontsize=9)
-    axes[0].set_title(f"Neuron {neuron} (frequency {k}), seed 0: whole run")
-    axes[0].legend(loc="upper right", fontsize=9)
-    ax = axes[1]
-    ax.set_xlim(swap - 500, 21_500)
-    ax.set_ylim(-1, 20)
-    ax.set_title("Zoom after the swap: snapped drifts back, moulded stays at 0")
-    ax.text(12_000, 9, "snap once: back to ~7%,\nlike normal training", color=ORANGE)
-    ax.text(12_000, 1.5, "wave module: held at 0%", color=GREEN)
-    save(fig, "snap_vs_mould.png")
 
 
 def plot_baseline_lesson() -> None:
@@ -801,13 +559,9 @@ def main() -> None:
     """Make every figure, skipping (with a warning) those whose runs are missing."""
     for make in (
         plot_clock,
-        plot_table_split,
         plot_story_curve,
         plot_neuron_lens,
-        plot_poly_vs_wave,
-        plot_jump_idea,
         plot_results_dots,
-        plot_snap_vs_mould,
         plot_baseline_lesson,
         plot_tuned_results,
         plot_nowcast_idea,
