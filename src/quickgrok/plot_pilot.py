@@ -14,6 +14,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from matplotlib.axes import Axes
 from torch import Tensor
 
 from quickgrok.data import Operation, make_dataset
@@ -45,7 +46,7 @@ class ProbeResult(TypedDict):
     spectrum: list[list[float]]  # per checkpoint: mean share of neuron variance per k
 
 
-def style_axes(ax: plt.Axes) -> None:
+def style_axes(ax: Axes) -> None:
     """Recessive axes: no top/right spines, light grid, muted ticks."""
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
@@ -126,7 +127,7 @@ def probe_run(run_dir: Path, layer: int = 0, poly_degree: int = 6) -> ProbeResul
     return result
 
 
-def mark_grok(ax: plt.Axes, step: int | None) -> None:
+def mark_grok(ax: Axes, step: int | None) -> None:
     """Dashed vertical line at the grokking step."""
     if step is not None:
         ax.axvline(step, color=MUTED, linestyle="--", linewidth=1)
@@ -183,7 +184,7 @@ def plot_training_curves(
 
 
 def plot_band(
-    ax: plt.Axes, x: list[int], q: list[tuple[float, float, float]], **kw: str
+    ax: Axes, x: list[int], q: list[tuple[float, float, float]], **kw: str
 ) -> None:
     """Median line with an interquartile band."""
     arr = np.array(q)

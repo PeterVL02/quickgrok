@@ -1,4 +1,4 @@
-"""Check model shapes and the layer selector. Run: uv run python tests/test_models.py"""
+"""Check model shapes and the layer selector."""
 
 import torch
 
@@ -25,8 +25,3 @@ def test_record_neurons() -> None:
     assert record_neurons(transformer).shape == (p * p, 512)
     x = torch.stack([a, b, torch.full_like(a, p)], dim=1)
     assert mlp(x).shape == transformer(x).shape == (p * p, p)
-
-
-if __name__ == "__main__":
-    test_record_neurons()
-    print("ok")

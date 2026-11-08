@@ -134,15 +134,13 @@ def train(
     than "none" it is a `SubstitutionHook` (thresholds `tau_share`, `tau_r2`) that also writes
     `out_dir/substitutions.jsonl` (see `SubstitutionHook` for `random_k`, `sub_all_at`, `basis`
     and `tau_energy`).
+    `nowcast` other than "none" adds a `NowcastHook` writing `out_dir/nowcast.jsonl` (snapshots
+    every `nowcast_snapshot_every` steps); `grokfast_lambda > 0` adds a `GrokfastHook`.
+    `monitor_every > 0` adds a `MonitorHook` writing `out_dir/monitor.jsonl`. `random_labels`
+    permutes the training targets (seeded).
     Checkpoints and `weight_norm` use the effective weights. With `stop_after_grok`, training
     ends that many steps after test accuracy first reaches GROK_ACC. For op "s5", `p` is
     replaced by the number of symbols, `S5_ORDER`.
-    `out_dir/substitutions.jsonl` (see `SubstitutionHook` for `random_k` and `sub_all_at`).
-    `nowcast` other than "none" adds a `NowcastHook` writing `out_dir/nowcast.jsonl` (snapshots
-    every `nowcast_snapshot_every` steps);
-    `grokfast_lambda > 0` adds a `GrokfastHook`. `monitor_every > 0` adds a `MonitorHook`
-    writing `out_dir/monitor.jsonl`. `random_labels` permutes the training targets (seeded). Checkpoints and `weight_norm` use the effective weights. With `stop_after_grok`, training
-    ends that many steps after test accuracy first reaches GROK_ACC.
     """
     assert save_every % eval_every == 0, "save_every must be a multiple of eval_every"
     p = S5_ORDER if op == "s5" else p

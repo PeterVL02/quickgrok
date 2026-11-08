@@ -1,7 +1,4 @@
-"""Check the nowcast forecasters, jump verification and the Grokfast hook.
-
-Run: uv run python tests/test_nowcast.py
-"""
+"""Check the nowcast forecasters, jump verification and the Grokfast hook."""
 
 import json
 import tempfile
@@ -140,13 +137,3 @@ def test_grokfast_lambda_zero() -> None:
         grads = [p.grad.clone() for p in model.parameters()]
         hook.after_backward(step, model)
         assert all(torch.equal(g, p.grad) for g, p in zip(grads, model.parameters()))
-
-
-if __name__ == "__main__":
-    test_linear_exact()
-    test_rejected_jump_restores()
-    test_norm_only_keeps_direction()
-    test_lstm_learns()
-    test_composes_with_module_substitution()
-    test_grokfast_lambda_zero()
-    print("ok")

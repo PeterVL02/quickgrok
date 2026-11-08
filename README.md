@@ -8,7 +8,7 @@ Can grokking be made to happen sooner? This project trains small networks on mod
 uv sync
 ```
 
-Torch is installed from the CUDA 13.2 wheel index (see `pyproject.toml`).
+Torch is installed from the CUDA 13.2 wheel index (see `pyproject.toml`). Run the tests with `uv run pytest`.
 
 ## Usage
 

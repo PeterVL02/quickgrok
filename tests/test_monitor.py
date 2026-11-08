@@ -1,7 +1,4 @@
-"""Check the random-label control, the firing rule, log-MAE and the excluded loss.
-
-Run: uv run python tests/test_monitor.py
-"""
+"""Check the random-label control, the firing rule, log-MAE and the excluded loss."""
 
 import math
 
@@ -52,11 +49,3 @@ def test_excluded_loss() -> None:
     assert math.isclose(excluded_loss(logits, y, [k, 3]), math.log(p), rel_tol=1e-9)
     plain = torch.nn.functional.cross_entropy(logits, y).item()
     assert math.isclose(excluded_loss(logits, y, [3, 5]), plain, rel_tol=1e-9)
-
-
-if __name__ == "__main__":
-    test_random_labels()
-    test_fire_step()
-    test_log_mae()
-    test_excluded_loss()
-    print("ok")
