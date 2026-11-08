@@ -1,6 +1,6 @@
 # Using quickgrok
 
-quickgrok is research code for studying **grokking**: small networks on modular arithmetic (a + b mod 97) fit their training data quickly and only generalise much later. It trains those networks, probes hidden neurons with regressions during training, and can swap well-fit neurons for trainable parametric modules to make grokking happen sooner. Results are in `reports/`; a student-level explanation is in `intuition/README.md`.
+quickgrok is research code for studying **grokking**: small networks on modular arithmetic (a + b mod 97) fit their training data quickly and only generalise much later. It trains those networks, probes hidden neurons with regressions during training, and can swap well-fit neurons for trainable parametric modules to make grokking happen sooner. Results are in `reports/`; an intuition-first walkthrough for ML practitioners is in `intuition/README.md`.
 
 > Status: research code, not a published package. Interfaces may change between branches. This page describes what exists on the current branch; update it when an entry point changes.
 

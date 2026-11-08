@@ -12,7 +12,7 @@ Torch is installed from the CUDA 13.2 wheel index (see `pyproject.toml`). Run th
 
 ## Usage
 
-See [docs/usage.md](docs/usage.md) for the command-line entry points, the Python API and how to plug the training hooks into your own PyTorch loop. Results are in `reports/`; a student-level walkthrough is in [intuition/README.md](intuition/README.md).
+See [docs/usage.md](docs/usage.md) for the command-line entry points, the Python API and how to plug the training hooks into your own PyTorch loop. Results are in `reports/`; an intuition-first walkthrough for ML practitioners is in [intuition/README.md](intuition/README.md).
 
 ## Findings
 
